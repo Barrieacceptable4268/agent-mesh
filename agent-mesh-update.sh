@@ -39,15 +39,25 @@ install_framework() {
     dst="$HOME/.local/bin"
     mkdir -p "$dst"
   fi
-  for f in agent-mesh agent-mesh-a2a.sh agent-mesh-update.sh agent-mesh-webhook.py agent-mesh-watch.sh agent-mesh-connect.sh; do
-    if [ -f "$src/$f" ]; then
-      cp "$src/$f" "$dst/$f" && chmod +x "$dst/$f" 2>/dev/null
-      echo "  ✓ $f → $dst/$f"
-    fi
+  # ZUKUNFTSSICHER: Wildcard-basiert statt fester Dateiliste!
+  # Matcht agent-mesh, agent-mesh-*.sh, agent-mesh-*.py (und Legacy mesh* für
+  # Alt-Installationen). Verhindert den Chicken-Egg-Bug: alte Update-Module
+  # mit alten Namen kopieren nichts, neue Dateien werden automatisch mitgenommen.
+  local copied=0
+  for f in "$src"/agent-mesh "$src"/agent-mesh-*.sh "$src"/agent-mesh-*.py \
+           "$src"/mesh "$src"/mesh-*.sh "$src"/mesh-*.py; do
+    [ -f "$f" ] || continue
+    local base; base=$(basename "$f")
+    cp "$f" "$dst/$base" && chmod +x "$dst/$base" 2>/dev/null
+    echo "  ✓ $base → $dst/$base"
+    copied=$((copied+1))
   done
+  if [ "$copied" -eq 0 ]; then
+    echo "  ⚠️  Keine Framework-Dateien gefunden in $src — Update unvollständig!"
+  fi
   # Verlinken, falls $HOME/.local/bin nicht im PATH (Linux)
   if [ "$dst" = "$HOME/.local/bin" ] && ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
-    echo "⚠  Füge ~/.local/bin zum PATH hinzu (oder nutze: $dst/mesh)"
+    echo "⚠  Füge ~/.local/bin zum PATH hinzu (oder nutze: $dst/agent-mesh)"
   fi
 }
 

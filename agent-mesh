@@ -62,7 +62,7 @@ load_conf() {
 
 # ─────────────────────────── init ───────────────────────────
 cmd_init() {
-  [ $# -ge 1 ] || die "Usage: mesh init <agent-name>"
+  [ $# -ge 1 ] || die "Usage: agent-mesh init <agent-name>"
   local name="$1"
   [ -f "$CONF" ] && die "Bereits initialisiert ($(grep AGENT_NAME= "$CONF")). Für Neustart: rm -rf $AGENT_MESH_HOME"
   mkdir -p "$AGENT_MESH_HOME/keys" "$MEMORIES_DIR" "$FRAMEWORK_DIR"
@@ -361,7 +361,7 @@ cmd_vault_revoke() {
 # ─────────────────────────── insight ───────────────────────────
 cmd_insight() {
   load_conf
-  [ $# -ge 2 ] || die "Usage: mesh insight add <text>"
+  [ $# -ge 2 ] || die "Usage: agent-mesh insight add <text>"
   local text="$*"
   local stamp; stamp=$(date -u +%Y%m%d-%H%M%S)
   local f="$MEMORIES_DIR/agents/$AGENT_NAME/insights/$stamp.md"
@@ -422,7 +422,7 @@ case "${1:-}" in
   connect) shift; cmd_connect "$@" ;;
   update)  shift; cmd_update "$@" ;;
   status)  shift; cmd_status ;;
-  *) echo "Usage: mesh {init|sync|send|reply|inbox|route|role|agents|vault|insight|update|status}" >&2; exit 1 ;;
+  *) echo "Usage: agent-mesh {init|sync|send|reply|inbox|route|role|agents|vault|insight|watch|connect|update|status}" >&2; exit 1 ;;
 esac
 }
 main "$@"
