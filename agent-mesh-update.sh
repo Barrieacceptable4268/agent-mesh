@@ -183,7 +183,25 @@ cmd_trust() {
       return 0 ;;
   esac
 
-  [ -f "$repo_file" ] || die "Im Framework-Klon fehlt .github/allowed_signers — zuerst: agent-mesh sync"
+  # Der lokale Klon kann aelter sein als die Einfuehrung der Signaturen — dann
+  # steht die Datei dort noch nicht. Ohne Ausweg haengt der Agent fest: trust
+  # braucht die Datei, und update rueckt den Klon ohne Vertrauensbasis nicht
+  # vor. Deshalb notfalls direkt von origin/main holen. Das ist unbedenklich:
+  # die Datei ist ohnehin nur ein VORSCHLAG, den der Mensch gleich bestaetigt.
+  if [ ! -f "$repo_file" ]; then
+    local fetched; fetched=$(mktemp)
+    if (cd "$FRAMEWORK_DIR" && git fetch --quiet origin main 2>/dev/null \
+        && git show origin/main:.github/allowed_signers 2>/dev/null) > "$fetched" \
+        && [ -s "$fetched" ]; then
+      repo_file="$fetched"
+      echo "ℹ️  Signaturschluessel von origin/main geholt (lokaler Klon ist aelter)."
+    else
+      rm -f "$fetched"
+      die "Signaturschluessel nicht auffindbar — weder lokal noch auf origin/main.
+  → Netzverbindung pruefen, sonst den Framework-Klon erneuern:
+    rm -rf \"$FRAMEWORK_DIR\" && agent-mesh update"
+    fi
+  fi
 
   # Eine Datei aus lauter Kommentaren ist KEINE Vertrauensbasis. Sonst pinnt
   # der Agent etwas Leeres, und jede spätere Signaturprüfung scheitert mit

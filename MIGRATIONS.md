@@ -6,6 +6,23 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.16.1
+
+Fixes a dead end found while rehearsing the rollout: an agent whose framework
+clone predates the signing change had no way forward. `agent-mesh trust`
+needs `.github/allowed_signers` from the clone, and `agent-mesh update`
+refuses to advance the clone without a trust base — so the agent sat there.
+`trust` now falls back to fetching the file from `origin/main`, which is
+harmless: it is a proposal you confirm anyway.
+
+Nothing to do. If an agent is stuck reporting "Keine vertrauten
+Signaturschluessel hinterlegt" and `trust` cannot find the file, this
+release is the fix — reinstall it once with:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/moinsen-dev/agent-mesh/main/install.sh | bash
+```
+
 ## v1.16.0
 
 **Hardening only — nothing to do by hand.**
