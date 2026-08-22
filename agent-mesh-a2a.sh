@@ -206,7 +206,7 @@ PYEOF
 # ─────────────────────────── Rollen ───────────────────────────
 cmd_role() {
   load_conf
-  [ $# -ge 1 ] || die "Usage: mesh role <hub|worker|specialist> [beschreibung]"
+  [ $# -ge 1 ] || die "Usage: agent-mesh role <hub|worker|specialist> [beschreibung]"
   local role="$1"
   case "$role" in
     hub|worker|specialist) ;;
@@ -222,7 +222,7 @@ cmd_role() {
 # ─────────────────────────── Hub-Routing ───────────────────────────
 cmd_route() {
   load_conf
-  [ $# -ge 2 ] || die "Usage: mesh route <empfaenger> <text>  (nur als Rolle hub)"
+  [ $# -ge 2 ] || die "Usage: agent-mesh route <empfaenger> <text>  (nur als Rolle hub)"
   local card; card=$(get_card)
   local myrole
   myrole=$(echo "$card" | python3 -c "import json,sys; print(json.load(sys.stdin).get('role','worker'))")
