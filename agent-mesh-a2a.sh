@@ -60,9 +60,36 @@ PYEOF
 
 # ─────────────────────────── Mailbox (Git-Queue, VERSCHLÜSSELT) ───────────────────────────
 # Security v1.1: Jede Nachricht wird mit dem Public-Key des EMPFÄNGERS
-# verschlüsselt (sops). Nur Sender + Empfänger können sie lesen.
-#   messages/<empfaenger>/<id>.json   ← Klartext-Header (Metadaten: from/to/ts)
-#   messages/<empfaenger>/<id>.json.enc  ← sops-verschlüsselter Text (nur Empfänger lesbar)
+# verschlüsselt (sops). Nur Sender + Empfänger lesen.
+
+# ── Push mit Auto-Rebase-Retry (Architektur-Fix 2026-08-22) ──
+# Problem (User-Fund): Gleichzeitige Pushes von Agents kollidieren
+# (non-fast-forward) — alte Push-Stellen schluckten den Fehler still,
+# Nachrichten gingen verloren.
+# Lösung: Nachrichten-Dateien haben EINDEUTIGE IDs (Timestamp+Zufall) →
+# keine Datei-Konflikte, nur Commit-Verlaufs-Konflikte → pull --rebase
+# löst sie automatisch. 3 Versuche, dann klare Fehlermeldung.
+push_retry() {
+  local attempt=1
+  while [ "$attempt" -le 3 ]; do
+    if git push origin HEAD >/dev/null 2>&1; then
+      return 0
+    fi
+    if [ "$attempt" -lt 3 ]; then
+      sleep 1
+      git pull --rebase origin main >/dev/null 2>&1 || {
+        # Rebase-Konflikt (unerwartet — IDs sind eindeutig): Backup + reset
+        git rebase --abort >/dev/null 2>&1 || true
+        git stash >/dev/null 2>&1 || true
+        git reset --hard origin/main >/dev/null 2>&1 || true
+        git stash pop >/dev/null 2>&1 || true
+      }
+    fi
+    attempt=$((attempt+1))
+  done
+  echo "⚠️  Push nach 3 Versuchen fehlgeschlagen — Nachricht liegt lokal in $MEMORIES_DIR (manuell: git push)" >&2
+  return 1
+}
 
 next_msg_id() {
   # Monotone ID: timestamp + kurzer Zufall (Kollisionen unwahrscheinlich)
@@ -123,7 +150,7 @@ EOF
 
   cd "$MEMORIES_DIR" && git add "messages/$to/$id.json" "messages/$to/$id.json.enc" >/dev/null 2>&1
   git commit -m "msg: $AGENT_NAME → $to (verschlüsselt)" >/dev/null 2>&1
-  git push origin HEAD >/dev/null 2>&1 || info "Push fehlgeschlagen (Remote prüfen)"
+  push_retry
   info "✅ Verschlüsselte Nachricht an '$to' gesendet (ID: $id)"
 }
 
@@ -160,7 +187,7 @@ EOF
 
   cd "$MEMORIES_DIR" && git add "messages/$from/$id.json" "messages/$from/$id.json.enc" >/dev/null 2>&1
   git commit -m "reply: $AGENT_NAME → $from ($reply_to, verschlüsselt)" >/dev/null 2>&1
-  git push origin HEAD >/dev/null 2>&1 || info "Push fehlgeschlagen"
+  push_retry
   info "✅ Verschlüsselte Antwort an '$from' gesendet (ID: $id)"
 }
 
@@ -237,7 +264,7 @@ cmd_role() {
   update_card "{\"role\":\"$role\",\"agent\":\"$AGENT_NAME\"}"
   cd "$MEMORIES_DIR" && git add "agents/$AGENT_NAME/card.json" >/dev/null 2>&1
   git commit -m "role: $AGENT_NAME ist jetzt $role" >/dev/null 2>&1
-  git push origin HEAD >/dev/null 2>&1 || true
+  push_retry
   info "✅ Rolle '$role' gesetzt — Agent Card aktualisiert."
 }
 
@@ -285,7 +312,7 @@ cmd_inbox_process() {
     info "📬 $n neue Nachricht(en) für $AGENT_NAME — siehe: mesh inbox"
     cd "$MEMORIES_DIR" && git add "messages/$AGENT_NAME/" >/dev/null 2>&1
     git commit -m "inbox: $n Nachricht(en) verarbeitet ($AGENT_NAME)" >/dev/null 2>&1
-    git push origin HEAD >/dev/null 2>&1 || true
+    push_retry
   else
     info "Keine neuen Nachrichten."
   fi

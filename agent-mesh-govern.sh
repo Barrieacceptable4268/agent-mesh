@@ -85,7 +85,7 @@ cmd_govern() {
   if [ "$dry_run" = "0" ] && [ -f "$MEMORIES_DIR/$GOV_FILE" ]; then
     (cd "$MEMORIES_DIR" && git add .github/governance.md >/dev/null 2>&1 \
       && git commit -m "governance: Issues zugewiesen" >/dev/null 2>&1 \
-      && git push origin HEAD >/dev/null 2>&1) || true
+      && push_retry) || true
     info "✅ Governance-Update gepusht."
   fi
 }

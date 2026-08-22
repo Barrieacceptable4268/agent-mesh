@@ -230,7 +230,7 @@ PYEOF
   if ! git diff --cached --quiet 2>/dev/null; then
     git commit -m "mesh-sync: $AGENT_NAME — $(date -u +%Y-%m-%dT%H:%M:%SZ)" 2>/dev/null \
       || info "Nichts zu committen"
-    git push origin HEAD 2>/dev/null || info "Push fehlgeschlagen (Branch/Remote prüfen)"
+    push_retry
   else
     info "Keine Änderungen — nichts zu committen"
   fi
@@ -300,7 +300,7 @@ EOF
 
   cd "$MEMORIES_DIR" && git add "vault/secrets/$key.yaml" vault/keys/ 2>/dev/null
   git commit -m "vault: $key (via $AGENT_NAME, für: ${for_agents:-nur $AGENT_NAME})" 2>/dev/null || true
-  git push origin HEAD 2>/dev/null || true
+  push_retry
   info "✅ Secret '$key' verschlüsselt (Empfänger: ${for_agents:-nur $AGENT_NAME})"
 }
 
@@ -350,7 +350,7 @@ cmd_vault_add_key() {
   echo "$pub" > "$MEMORIES_DIR/vault/keys/$agent.age.pub"
   cd "$MEMORIES_DIR" && git add "vault/keys/$agent.age.pub" >/dev/null 2>&1
   git commit -m "vault: Public-Key für $agent registriert" >/dev/null 2>&1
-  git push origin HEAD >/dev/null 2>&1 || true
+  push_retry
   info "✅ Public-Key für '$agent' registriert — andere Agents können ihn via --for adressieren."
 }
 
@@ -428,7 +428,7 @@ cmd_vault_revoke() {
 
   cd "$MEMORIES_DIR" && git add "vault/keys/" "vault/secrets/" >/dev/null 2>&1
   git commit -m "vault: REVOKE $agent — Keys entfernt, alle Secrets re-encrypted" >/dev/null 2>&1
-  git push origin HEAD >/dev/null 2>&1 || true
+  push_retry
   info "✅ Agent '$agent' widerrufen — kann keine Secrets mehr lesen."
 }
 
@@ -448,7 +448,7 @@ cmd_insight() {
 $text
 EOF
   cd "$MEMORIES_DIR" && git add "$f" && git commit -m "insight: $AGENT_NAME $stamp" >/dev/null 2>&1
-  git push origin HEAD 2>/dev/null || true
+  push_retry
   info "✅ Insight geteilt: agents/$AGENT_NAME/insights/$stamp.md"
 }
 
