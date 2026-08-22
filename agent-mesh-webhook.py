@@ -16,11 +16,15 @@ import json
 import os
 import subprocess
 import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 SECRET = os.environ.get("AGENT_MESH_WEBHOOK_SECRET", "")
 AGENT_MESH_BIN = os.environ.get("AGENT_MESH_BIN", "/usr/local/bin/agent-mesh")
 EXPECTED_REPO = "moinsen-dev/agent-mesh-memories"
+
+# Audit-Befund D6: Der Body wurde ungeprueft und VOR der Signaturpruefung in
+# den Speicher gelesen. GitHub-Push-Payloads liegen weit unter 1 MB.
+MAX_BODY = 1 * 1024 * 1024
 
 
 def verify_signature(payload: bytes, signature: str) -> bool:
@@ -33,13 +37,31 @@ def verify_signature(payload: bytes, signature: str) -> bool:
 
 
 class Handler(BaseHTTPRequestHandler):
+    # Kein HTTP/1.1: das verlangt Content-Length auf jeder Antwort, sonst
+    # wartet der Client bei Keep-Alive auf ein Body-Ende, das nie kommt.
+    # HTTP/1.0 schliesst nach der Antwort — fuer einen Webhook genau richtig.
+    timeout = 15        # haengende Verbindungen nicht ewig halten
+
     def do_POST(self):
         if self.path != "/hook":
             self.send_response(404)
             self.end_headers()
             return
-        length = int(self.headers.get("Content-Length", 0))
+        try:
+            length = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            self.send_response(400)
+            self.end_headers()
+            return
+        if length < 0 or length > MAX_BODY:
+            self.send_response(413)
+            self.end_headers()
+            return
         payload = self.rfile.read(length)
+        if len(payload) != length:          # abgebrochene Uebertragung
+            self.send_response(400)
+            self.end_headers()
+            return
         signature = self.headers.get("X-Hub-Signature-256", "")
 
         if not verify_signature(payload, signature):
@@ -60,11 +82,19 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         # Sofortiger Sync + Inbox (asynchron, blockiert nicht den Webhook)
-        subprocess.Popen(
-            [AGENT_MESH_BIN, "sync"],
-            stdout=open("/var/log/agent-mesh-webhook.log", "a"),
-            stderr=subprocess.STDOUT,
-        )
+        # Log-Handle schliessen statt pro Request einen Deskriptor zu verlieren.
+        # Faellt der Start fehl (z.B. AGENT_MESH_BIN fehlt nach einem
+        # missglueckten Update), muss das eine saubere 500 geben — sonst stirbt
+        # der Handler und der Aufrufer bekommt gar keine Antwort.
+        try:
+            with open("/var/log/agent-mesh-webhook.log", "a") as logf:
+                subprocess.Popen([AGENT_MESH_BIN, "sync"],
+                                 stdout=logf, stderr=subprocess.STDOUT)
+        except OSError as e:
+            sys.stderr.write(f"[agent-mesh-webhook] sync konnte nicht starten: {e}\n")
+            self.send_response(500)
+            self.end_headers()
+            return
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -86,7 +116,9 @@ def main():
     if not SECRET:
         print("❌ AGENT_MESH_WEBHOOK_SECRET nicht gesetzt", file=sys.stderr)
         sys.exit(1)
-    server = HTTPServer(("127.0.0.1", port), Handler)
+    # Threading: eine langsame Verbindung darf nicht alle weiteren blockieren
+    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server.daemon_threads = True
     print(f"✅ agent-mesh-webhook auf 127.0.0.1:{port} (Secret: {'gesetzt' if SECRET else 'FEHLT'})")
     server.serve_forever()
 

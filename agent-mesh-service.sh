@@ -43,7 +43,17 @@ svc_install() {
     linux)
       if command -v systemctl >/dev/null 2>&1; then
         local unit="/etc/systemd/system/$SVC_NAME.service"
-        cat > /tmp/$SVC_NAME.service << EOF
+        # SECURITY (Audit-Befund 11): frueher wurde die Unit nach
+        # /tmp/agent-mesh-watch.service geschrieben und von dort als root nach
+        # /etc/systemd/system kopiert. Zwischen Schreiben und Kopieren konnte
+        # ein lokaler Nutzer die Datei austauschen — oder vorab einen Symlink
+        # dorthin legen — und sich so eine beliebige root-Unit installieren.
+        # Jetzt direkt ans Ziel, ohne Umweg ueber ein world-writable Verzeichnis.
+        if [ ! -w "$(dirname "$unit")" ]; then
+          echo "❌ Keine Rechte für $unit — sudo nötig"
+          return 1
+        fi
+        cat > "$unit" << EOF
 [Unit]
 Description=Agent-Mesh Watch (Auto-Sync + Self-Update)
 After=network-online.target
@@ -61,7 +71,7 @@ RestartSec=10
 [Install]
 WantedBy=multi-user.target
 EOF
-        cp /tmp/$SVC_NAME.service "$unit" 2>/dev/null || { echo "❌ Keine Rechte für $unit — sudo nötig"; return 1; }
+        chmod 644 "$unit" 2>/dev/null || true
         systemctl daemon-reload
         systemctl enable $SVC_NAME >/dev/null 2>&1
         systemctl restart $SVC_NAME

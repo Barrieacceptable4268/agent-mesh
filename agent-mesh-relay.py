@@ -71,6 +71,12 @@ AUTH_TIMEOUT = 15        # Sekunden für den gesamten Handshake (Audit-Befund D2
 MAX_QUEUE_MSGS = 500     # pro Agent (Audit-Befund D1)
 MAX_QUEUE_BYTES = 32 * 1024 * 1024
 QUEUE_TTL = 7 * 24 * 3600
+MAX_FRAME = 256 * 1024   # 2 MB waren grosszügig für einen Nachrichten-Blob (D3)
+MAX_CONN_PER_IP = 20     # Verbindungsobergrenze (D2-Rest)
+MAX_CONN_PER_AGENT = 5
+RATE_MSGS = 30           # Nachrichten je Fenster und Agent (D3)
+RATE_WINDOW = 60.0
+PRESENCE_MIN_GAP = 10.0  # Presence-Fanout ist O(n²) — nicht im Sekundentakt (D4)
 
 
 def valid_agent(name) -> bool:
@@ -84,6 +90,9 @@ class Relay:
         self.age_bin = age_bin
         os.makedirs(queue_dir, exist_ok=True)
         self.clients: dict[str, set] = {}
+        self.conn_per_ip: dict[str, int] = {}
+        self.rate: dict[str, list] = {}          # agent → [(ts), …] im Fenster
+        self.last_presence: dict[str, float] = {}
 
     # ── Key-Registry ──
     def pubkey_for(self, agent: str) -> str | None:
@@ -218,7 +227,23 @@ class Relay:
         else:
             self.save_offline(agent, msg)
 
+    def rate_ok(self, agent: str) -> bool:
+        now = time.time()
+        hits = [t for t in self.rate.get(agent, []) if now - t < RATE_WINDOW]
+        if len(hits) >= RATE_MSGS:
+            self.rate[agent] = hits
+            return False
+        hits.append(now)
+        self.rate[agent] = hits
+        return True
+
     async def broadcast_presence(self, agent: str, status: str):
+        # Ein Client, der im Sekundentakt neu verbindet, erzeugte bisher
+        # quadratischen Fanout im Event-Loop.
+        now = time.time()
+        if now - self.last_presence.get(agent, 0.0) < PRESENCE_MIN_GAP:
+            return
+        self.last_presence[agent] = now
         for other, conns in list(self.clients.items()):
             if other == agent:
                 continue
@@ -232,13 +257,27 @@ class Relay:
     # ── Verbindungs-Handler ──
     async def handle(self, ws):
         agent = None
+        peer = "?"
         try:
+            try:
+                peer = ws.remote_address[0] if ws.remote_address else "?"
+            except Exception:
+                peer = "?"
+            if self.conn_per_ip.get(peer, 0) >= MAX_CONN_PER_IP:
+                log.warning("⛔ %s: zu viele gleichzeitige Verbindungen", peer)
+                return
+            self.conn_per_ip[peer] = self.conn_per_ip.get(peer, 0) + 1
             try:
                 agent = await asyncio.wait_for(self.do_auth(ws), timeout=AUTH_TIMEOUT)
             except asyncio.TimeoutError:
                 log.info("⛔ Auth-Timeout — Verbindung geschlossen")
                 return
             if not agent:
+                return
+
+            if len(self.clients.get(agent, ())) >= MAX_CONN_PER_AGENT:
+                log.warning("⛔ %s: Verbindungsgrenze pro Agent erreicht", agent)
+                await ws.send(json.dumps({"type": "error", "error": "too_many_connections"}))
                 return
 
             self.clients.setdefault(agent, set()).add(ws)
@@ -265,6 +304,10 @@ class Relay:
                         await ws.send(json.dumps(
                             {"type": "error", "error": "invalid_recipient"}))
                         continue
+                    if not self.rate_ok(agent):
+                        log.warning("⛔ %s: Rate-Limit erreicht", agent)
+                        await ws.send(json.dumps({"type": "error", "error": "rate_limited"}))
+                        continue
                     log.info("📨 %s → %s (%d B)", agent, to, len(blob))
                     await self.deliver(to, {"type": "msg", "from": agent,
                                             "blob": blob, "ts": time.time()})
@@ -277,6 +320,10 @@ class Relay:
         except Exception as e:
             log.warning("⚠️  %s: %s", agent or "?", e)
         finally:
+            if peer in self.conn_per_ip:
+                self.conn_per_ip[peer] -= 1
+                if self.conn_per_ip[peer] <= 0:
+                    del self.conn_per_ip[peer]
             if agent and agent in self.clients:
                 self.clients[agent].discard(ws)
                 if not self.clients[agent]:
@@ -317,7 +364,7 @@ async def main():
     relay = Relay(args.keys_dir, args.queue_dir, age_bin)
     log.info("🚀 Agent-Mesh-Relay auf ws://%s:%d (%d Agent-Keys registriert)",
              args.host, args.port, n_keys)
-    async with websockets.serve(relay.handle, args.host, args.port, max_size=2_000_000):
+    async with websockets.serve(relay.handle, args.host, args.port, max_size=MAX_FRAME):
         await asyncio.Future()
 
 

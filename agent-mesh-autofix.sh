@@ -308,8 +308,12 @@ Closes #$issue_num
       # `bash -c "..."`-String interpoliert => Command Injection als $sys_user.
       # Jetzt: Werte NUR ueber env, inneres Skript in einem ZITIERTEN Heredoc
       # (keine Expansion beim Schreiben), Body ueber --body-file.
-      local tmpclone="/tmp/autofix-pr-$issue_num"
-      rm -rf "$tmpclone" 2>/dev/null || true
+      # Kein vorhersagbarer Pfad in einem world-writable Verzeichnis: ein
+      # vorab angelegtes /tmp/autofix-pr-<n> (oder ein Symlink dorthin) waere
+      # ein fremdbestimmtes Ziel fuer Klon und anschliessendes rm -rf.
+      local tmpclone; tmpclone=$(sudo -u "$sys_user" mktemp -d "/tmp/autofix-pr-$issue_num.XXXXXX") || {
+        echo "  ❌ Temporaeres Verzeichnis konnte nicht angelegt werden"; return 1; }
+      rmdir "$tmpclone" 2>/dev/null || true
       local bodyfile; bodyfile=$(mktemp "/tmp/autofix-body-$issue_num.XXXXXX")
       {
         printf '%s\n\n' "🤖 Auto-Fix von Agent **$AGENT_NAME** für Issue #$issue_num."

@@ -37,6 +37,9 @@ except ImportError:
 
 
 AGE_BIN = os.environ.get("AGE_BIN", "age")
+# Muss zum Relay passen (agent-mesh-relay.py, MAX_FRAME) — sonst bricht eine
+# zu grosse Nachricht mit einer Meldung ab, die nichts erklaert.
+MAX_FRAME = 256 * 1024
 
 
 def solve_challenge(blob: str, key_file: str) -> str:
@@ -70,7 +73,7 @@ async def authenticate(ws, agent: str, key_file: str):
 
 
 async def send_one(url, key_file, agent, to, blob):
-    async with websockets.connect(url, max_size=2_000_000) as ws:
+    async with websockets.connect(url, max_size=MAX_FRAME) as ws:
         await authenticate(ws, agent, key_file)
         await ws.send(json.dumps({"type": "msg", "to": to, "blob": blob}))
         # kurzes ack-window
@@ -82,7 +85,7 @@ async def send_one(url, key_file, agent, to, blob):
 
 
 async def recv_one(url, key_file, agent):
-    async with websockets.connect(url, max_size=2_000_000) as ws:
+    async with websockets.connect(url, max_size=MAX_FRAME) as ws:
         await authenticate(ws, agent, key_file)
         # auth_ok → dann gequeued Nachrichten + evtl. presence
         try:

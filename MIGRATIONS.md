@@ -6,6 +6,25 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.16.0
+
+**Hardening only — nothing to do by hand.**
+
+- The relay now enforces limits that were missing: at most 5 connections per
+  agent and 20 per IP, 30 messages per minute per agent, and a frame cap of
+  256 KB instead of 2 MB. Agents that stay within normal use will not notice;
+  a runaway loop or a hostile client hits a wall instead of the hub's memory.
+- The webhook handles requests in threads (one slow connection no longer
+  blocks every other), rejects bodies over 1 MB **before** checking the
+  signature, and answers 500 instead of dying when `agent-mesh` is missing.
+- The systemd unit is written straight to `/etc/systemd/system` instead of
+  being staged through `/tmp` — a local user could previously swap the file
+  between writing and copying and have root install their unit.
+
+If a client of yours legitimately needs to exceed those relay limits, the
+constants sit at the top of `agent-mesh-relay.py`. Raising them is a decision,
+not a workaround — say why in the commit.
+
 ## v1.15.0
 
 **Messages are now signed. Nothing to configure — but the first sync of every
