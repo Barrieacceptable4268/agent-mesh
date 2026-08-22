@@ -6,6 +6,35 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.23.0
+
+**The dashboard now says why an OAuth login failed, and which version is
+running.**
+
+`OAuth-Token-Austausch fehlgeschlagen` covered three unrelated causes: a
+deployed dashboard still missing the `await` fix, wrong client credentials, or
+a redirect URI that does not match the OAuth app. The message named none of
+them, so every occurrence sent the operator down a guess.
+
+It now reports GitHub's actual error, adds a targeted hint, logs it
+server-side, and prints the running version. New unauthenticated endpoint:
+
+```bash
+curl -s https://mesh-console.moinsen.dev/healthz
+# {"status":"ok","version":"1.23.0"}
+```
+
+That answers, from outside and in one second, the question that kept coming up
+today: is the service running the version we think it is?
+
+**On the hub, before updating**, this tells you whether the old dashboard is
+the cause of a failing login:
+
+```bash
+grep -c "await awaitFetch" /usr/local/bin/agent-mesh-dashboard.js
+# 0 = pre-v1.13 file, the login cannot work at all
+```
+
 ## v1.22.0
 
 **A pipeline bug that inverted conditions, plus two installer fixes.**

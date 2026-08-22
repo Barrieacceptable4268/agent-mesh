@@ -42,6 +42,29 @@ if (!GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET) {
   process.exit(1);
 }
 
+// Welche Fassung läuft hier eigentlich? Genau diese Frage war heute mehrfach
+// nicht zu beantworten — ein Dienst lief weiter mit altem Code, während das
+// Update Erfolg meldete. Deshalb trägt das Dashboard seine Version sichtbar.
+const DASH_VERSION = (() => {
+  for (const p of [path.join(FRAMEWORK, "VERSION"), "/usr/local/bin/../VERSION"]) {
+    try { return fs.readFileSync(p, "utf8").trim(); } catch {}
+  }
+  return "unbekannt";
+})();
+
+function hint(why) {
+  const w = String(why || "").toLowerCase();
+  if (w.includes("not found") || w.includes("incorrect_client"))
+    return "→ DASHBOARD_GITHUB_CLIENT_ID / _SECRET prüfen: kennt GitHub diese OAuth-App?";
+  if (w.includes("redirect_uri"))
+    return "→ Die Callback-URL der OAuth-App muss exakt DASHBOARD_GITHUB_REDIRECT entsprechen.";
+  if (w.includes("bad_verification_code") || w.includes("expired"))
+    return "→ Der Code war schon verbraucht oder abgelaufen. Login neu starten.";
+  if (w.includes("keine verbindung"))
+    return "→ Der Host kommt nicht an github.com heran (Netz/Proxy/Firewall).";
+  return "→ Läuft hier die aktuelle Fassung? agent-mesh report zeigt es.";
+}
+
 const sessions = new Map();     // token → {expiry, user}   NUR echte Anmeldungen
 // SECURITY: OAuth-States gehoeren NICHT in dieselbe Map wie Sessions. Lagen sie
 // dort (als "oauth_<state>" mit expiry), genuegte ein `GET /login` — der state
@@ -96,10 +119,15 @@ function awaitFetch(url, opts = {}) {
       let body = "";
       res.on("data", c => body += c);
       res.on("end", () => {
-        try { resolve(JSON.parse(body)); } catch { resolve(null); }
+        // Status und Rohtext mitgeben: ohne sie lässt sich später nicht
+        // unterscheiden, ob GitHub etwas abgelehnt hat oder ob wir gar nicht
+        // erst angekommen sind.
+        let parsed = null;
+        try { parsed = JSON.parse(body); } catch {}
+        resolve({ status: res.statusCode, json: parsed, raw: body.slice(0, 300) });
       });
     });
-    req.on("error", () => resolve(null));
+    req.on("error", (e) => resolve({ status: 0, json: null, raw: String(e && e.message) }));
     if (opts.body) req.write(opts.body);
     req.end();
   });
@@ -209,16 +237,30 @@ const server = http.createServer(async (req, res) => {
         redirect_uri: GITHUB_REDIRECT,
       }),
     });
-    if (!tokenResp || !tokenResp.access_token) {
-      res.writeHead(401, { "Content-Type": "text/plain" });
-      res.end("OAuth-Token-Austausch fehlgeschlagen");
+    const tok = tokenResp && tokenResp.json;
+    if (!tok || !tok.access_token) {
+      // Frühere Fassung sagte nur "OAuth-Token-Austausch fehlgeschlagen" — das
+      // deckte drei völlig verschiedene Ursachen ab (veraltete Version ohne
+      // await, falsche Client-Zugangsdaten, abweichende Redirect-URI) und
+      // schickte den Betreiber jedes Mal auf die falsche Fährte.
+      const why = (tok && (tok.error_description || tok.error))
+        || (tokenResp && tokenResp.status === 0 ? "keine Verbindung zu github.com" : null)
+        || (tokenResp ? `HTTP ${tokenResp.status}: ${tokenResp.raw}` : "keine Antwort");
+      console.error(`[oauth] Token-Austausch fehlgeschlagen: ${why}`);
+      res.writeHead(502, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end(
+        "OAuth-Token-Austausch fehlgeschlagen\n\n" +
+        "Grund: " + why + "\n\n" +
+        hint(why) + "\n\n" +
+        "Version dieses Dashboards: " + DASH_VERSION + "\n");
       return;
     }
     // User-Info holen
     const userResp = await awaitFetch("https://api.github.com/user", {
       headers: { "Authorization": "Bearer " + tokenResp.access_token, "User-Agent": "agent-mesh-dashboard" },
     });
-    let login = userResp && userResp.login ? String(userResp.login) : "";
+    const userJson = userResp && userResp.json;
+    let login = userJson && userJson.login ? String(userJson.login) : "";
     if (!/^[A-Za-z0-9-]{1,39}$/.test(login)) login = "";   // GitHub-Namensraum
     if (!login || !verifyGitHubUser(login)) {
       res.writeHead(403, { "Content-Type": "text/html" });
@@ -242,6 +284,14 @@ const server = http.createServer(async (req, res) => {
     const sess = cookie ? sessions.get(cookie[1]) : null;
     res.writeHead(200, { "Content-Type": "application/json" });
     res.end(JSON.stringify({ user: sess ? sess.user : null }));
+    return;
+  }
+
+  // Unauthentifiziert und bewusst minimal: nur die Version. Damit lässt sich
+  // von aussen feststellen, ob der Dienst den Stand fährt, den man glaubt.
+  if (url.pathname === "/healthz") {
+    res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+    res.end(JSON.stringify({ status: "ok", version: DASH_VERSION }));
     return;
   }
 
