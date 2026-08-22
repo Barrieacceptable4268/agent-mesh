@@ -106,57 +106,9 @@ if [ "${AGENT_MESH_SKIP_INIT:-0}" != "1" ]; then
   AGENT_MESH_HOME="$AGENT_MESH_HOME" "$BIN_DIR/agent-mesh" doctor --vault 2>/dev/null | tail -4 || true
 fi
 
-# ── 6. Auto-Sync-Daemon einrichten (damit der Agent OHNE Zutun aktuell bleibt!) ──
-setup_watch() {
-  # systemd (Linux): agent-mesh-watch.service installieren
-  if command -v systemctl >/dev/null 2>&1 && [ -w /etc/systemd/system ] 2>/dev/null; then
-    local unit="$BIN_DIR/agent-mesh-watch.service"
-    # Unit aus dem Framework-Klon holen (falls vorhanden), sonst inline
-    if [ ! -f "$unit" ] && [ -f "$AGENT_MESH_HOME/framework/agent-mesh-watch.service" ]; then
-      cp "$AGENT_MESH_HOME/framework/agent-mesh-watch.service" "$unit"
-    fi
-    if [ -f "$unit" ]; then
-      cp "$unit" /etc/systemd/system/agent-mesh-watch.service
-      systemctl daemon-reload 2>/dev/null
-      systemctl enable agent-mesh-watch 2>/dev/null
-      systemctl restart agent-mesh-watch 2>/dev/null
-      say "  ✓ systemd: agent-mesh-watch aktiv (Auto-Sync + Self-Update)"
-      return 0
-    fi
-  fi
-  # macOS (launchd): LaunchAgent einrichten
-  if [ "$(uname)" = "Darwin" ]; then
-    local plist="$HOME/Library/LaunchAgents/dev.moinsen.agentmesh.watch.plist"
-    mkdir -p "$(dirname "$plist")"
-    cat > "$plist" << PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>dev.moinsen.agentmesh.watch</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/bash</string>
-    <string>-lc</string>
-    <string>agent-mesh watch 60</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>$HOME/.agent-mesh/watch.log</string>
-  <key>StandardErrorPath</key><string>$HOME/.agent-mesh/watch.log</string>
-</dict>
-</plist>
-PLIST
-    launchctl unload "$plist" 2>/dev/null || true
-    launchctl load "$plist" 2>/dev/null && say "  ✓ launchd: agent-mesh-watch aktiv (Auto-Sync + Self-Update)"
-    return 0
-  fi
-  # Fallback: Hinweis auf Cron/Task-Scheduler
-  warn "Auto-Sync nicht automatisch eingerichtet — bitte manuell:"
-  echo "    agent-mesh watch 60    # läuft dauerhaft (systemd/launchd/Task-Scheduler)"
-}
-
-setup_watch
+# ── 6. Auto-Sync-Daemon einrichten (agent-mesh service — systemd/launchd/Task-Scheduler) ──
+AGENT_MESH_HOME="$AGENT_MESH_HOME" "$BIN_DIR/agent-mesh" service install --interval "${AGENT_MESH_WATCH_INTERVAL:-60}" 2>/dev/null \
+  || say "ℹ️  Auto-Sync manuell starten: agent-mesh service install (oder watch 60)"
 
 say "✅ Fertig! Agent '$NAME' ist installiert."
 say "   Nächste Schritte: agent-mesh role <hub|worker|specialist> · agent-mesh vault set <k> <v>"
