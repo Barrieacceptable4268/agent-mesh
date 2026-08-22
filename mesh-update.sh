@@ -20,11 +20,14 @@ local_version() {
   fi
 }
 
-# Neueste Version vom Remote (ohne clone: via git ls-remote + raw fetch)
+# Neueste Version vom Remote — via git fetch (raw.githubusercontent cached unzuverlässig!)
 remote_version() {
-  curl -fsSL --max-time 15 \
-    "https://raw.githubusercontent.com/$GH_ORG/$PUBLIC_REPO/main/VERSION" 2>/dev/null \
-    || echo "0.1.0"
+  if [ -d "$FRAMEWORK_DIR/.git" ]; then
+    (cd "$FRAMEWORK_DIR" && git fetch origin main --quiet 2>/dev/null; \
+     git show origin/main:VERSION 2>/dev/null) || echo "0.1.0"
+  else
+    echo "0.1.0"
+  fi
 }
 
 # Framework-Dateien installieren (mesh + Module)
