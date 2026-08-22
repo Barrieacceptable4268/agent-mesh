@@ -212,8 +212,17 @@ PYEOF
 import json, sys
 out, pfile, sig = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(pfile, encoding="utf-8") as f: payload = f.read()
+env = {"payload": payload, "sig": sig}
+# Befund 12: Ohne Polsterung verrät die Dateigröße die Nachrichtenlänge —
+# "drei Zeichen" und "zwei Absätze" sind von außen unterscheidbar. Auf volle
+# 2-KB-Blöcke auffüllen. Das Füllfeld steht NEBEN der signierten Payload,
+# die Signatur bleibt davon unberührt.
+BLOCK = 2048
+base = len(json.dumps({**env, "pad": ""}).encode("utf-8"))
+target = ((base // BLOCK) + 1) * BLOCK
+env["pad"] = "." * max(0, target - base)
 with open(out, "w", encoding="utf-8") as f:
-    json.dump({"payload": payload, "sig": sig}, f)
+    json.dump(env, f)
 PYEOF
 
   if ! SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops --encrypt \
@@ -262,7 +271,7 @@ EOF
   fi
 
   cd "$MEMORIES_DIR" && git add "messages/$to/$id.json" "messages/$to/$id.json.enc" >/dev/null 2>&1
-  git commit -m "msg: $AGENT_NAME → $to (verschlüsselt)" >/dev/null 2>&1
+  git commit -m "msg: verschlüsselt" >/dev/null 2>&1
   push_retry
   info "✅ Verschlüsselte Nachricht an '$to' gesendet (ID: $id)"
 }
@@ -299,7 +308,7 @@ EOF
   echo "$enc" > "$(msg_enc "$f")"
 
   cd "$MEMORIES_DIR" && git add "messages/$from/$id.json" "messages/$from/$id.json.enc" >/dev/null 2>&1
-  git commit -m "reply: $AGENT_NAME → $from ($reply_to, verschlüsselt)" >/dev/null 2>&1
+  git commit -m "reply: verschlüsselt" >/dev/null 2>&1
   push_retry
   info "✅ Verschlüsselte Antwort an '$from' gesendet (ID: $id)"
 }
@@ -472,7 +481,7 @@ cmd_inbox_process() {
   if [ "$n" -gt 0 ]; then
     info "📬 $n neue Nachricht(en) für $AGENT_NAME — siehe: mesh inbox"
     cd "$MEMORIES_DIR" && git add "messages/$AGENT_NAME/" >/dev/null 2>&1
-    git commit -m "inbox: $n Nachricht(en) verarbeitet ($AGENT_NAME)" >/dev/null 2>&1
+    git commit -m "inbox: verarbeitet" >/dev/null 2>&1
     push_retry
   else
     info "Keine neuen Nachrichten."

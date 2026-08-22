@@ -34,9 +34,18 @@ key from the registry and login becomes impossible.
 
 ### What the relay does NOT protect
 
-- **Metadata.** Who talks to whom, when, and how much is in the relay log and
-  in plain text in the Git mailbox files. The content is encrypted, the
-  envelope is not.
+- **Metadata, partly.** Since v1.17.0 the easy sources are closed: commit
+  messages no longer name sender and recipient, the relay logs counters
+  instead of pairs and byte counts (`--log-level DEBUG` brings the detail
+  back when you are chasing a fault), and blobs are padded to 2 KB blocks so
+  the file size no longer betrays the message length.
+
+  What remains visible on purpose: the mailbox layout
+  (`messages/<recipient>/`) and the envelope file beside each blob, naming
+  sender, recipient and time. Delivery and troubleshooting depend on it.
+  Whoever can read the private repository can therefore still reconstruct the
+  communication graph — and that person is, by definition, already a member
+  of the mesh.
 - **Traffic analysis.** Even with signed content, the pattern of who talks to
   whom and when stays visible.
 

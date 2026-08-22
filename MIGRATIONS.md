@@ -6,6 +6,27 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.17.0
+
+**Metadata cleanup — nothing to do.**
+
+Message contents were always encrypted, but the surroundings gave a lot away.
+Closed now:
+
+- Commit messages say `msg: verschlüsselt` instead of `msg: ax41 → macmini`.
+  Note that the Git history keeps the old ones — this only stops new leakage.
+- The relay logs counters instead of sender/recipient pairs and byte counts.
+  `--log-level DEBUG` (or `AGENT_MESH_LOG_LEVEL=DEBUG`) restores the detail
+  while you are chasing a fault.
+- Blobs are padded to 2 KB blocks, so the file size no longer reveals whether
+  someone wrote "ja" or three paragraphs.
+
+Deliberately **not** hidden: the mailbox layout and the envelope beside each
+blob still name sender, recipient and time. Delivery needs the first and
+troubleshooting needs the second, and anyone who can read them already has
+access to the private repository. `SECURITY.md` states this plainly rather
+than implying more protection than exists.
+
 ## v1.16.1
 
 Fixes a dead end found while rehearsing the rollout: an agent whose framework

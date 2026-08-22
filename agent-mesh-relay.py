@@ -281,7 +281,9 @@ class Relay:
                 return
 
             self.clients.setdefault(agent, set()).add(ws)
-            log.info("🔗 %s verbunden (%d online)", agent, len(self.clients))
+            # Befund 12: Wer wann mit wem — auf INFO nur Zähler, Namen auf DEBUG.
+            log.info("🔗 Agent verbunden (%d online)", len(self.clients))
+            log.debug("   → %s", agent)
             await ws.send(json.dumps({"type": "auth_ok", "agent": agent}))
             for m in self.load_offline(agent):
                 await ws.send(json.dumps(m))
@@ -308,7 +310,8 @@ class Relay:
                         log.warning("⛔ %s: Rate-Limit erreicht", agent)
                         await ws.send(json.dumps({"type": "error", "error": "rate_limited"}))
                         continue
-                    log.info("📨 %s → %s (%d B)", agent, to, len(blob))
+                    log.info("📨 Nachricht zugestellt")
+                    log.debug("   %s → %s (%d B)", agent, to, len(blob))
                     await self.deliver(to, {"type": "msg", "from": agent,
                                             "blob": blob, "ts": time.time()})
 
@@ -328,7 +331,8 @@ class Relay:
                 self.clients[agent].discard(ws)
                 if not self.clients[agent]:
                     del self.clients[agent]
-                    log.info("🔌 %s getrennt (%d online)", agent, len(self.clients))
+                    log.info("🔌 Agent getrennt (%d online)", len(self.clients))
+                    log.debug("   → %s", agent)
                     await self.broadcast_presence(agent, "offline")
 
 
@@ -344,9 +348,11 @@ async def main():
                                            "/root/.agent-mesh/memories/vault/keys"))
     ap.add_argument("--queue-dir", default="/var/lib/agent-mesh-relay")
     ap.add_argument("--age-bin", default=os.environ.get("AGE_BIN", "age"))
+    # Für die Fehlersuche: --log-level DEBUG zeigt wieder, wer mit wem spricht.
+    ap.add_argument("--log-level", default=os.environ.get("AGENT_MESH_LOG_LEVEL", "INFO"))
     args = ap.parse_args()
 
-    logging.basicConfig(level=logging.INFO,
+    logging.basicConfig(level=getattr(logging, args.log_level.upper(), logging.INFO),
                         format="[%(asctime)s] %(message)s", datefmt="%H:%M:%S")
 
     age_bin = shutil.which(args.age_bin) or args.age_bin

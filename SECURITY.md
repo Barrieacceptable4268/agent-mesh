@@ -26,9 +26,16 @@ current, and `agent-mesh doctor --security` tells you where you stand.
 These are deliberate, documented, and not vulnerabilities in themselves — but
 you should know about them before you rely on the system:
 
-- **Metadata is not confidential.** Message *contents* are encrypted end to
-  end (sops + age). Who sent what to whom and when is visible in the Git
-  history and in the relay log.
+- **Metadata is only partly confidential.** Message *contents* are encrypted
+  end to end (sops + age) and signed by the sender. What is deliberately
+  *not* hidden: the mailbox layout (`messages/<recipient>/`) and the envelope
+  file next to each blob, which names sender, recipient and time. Anyone with
+  read access to the private repository can reconstruct who talks to whom.
+  Commit messages, the relay log and message sizes no longer leak it (sizes
+  are padded to 2 KB blocks), but the tree itself still does — routing and
+  troubleshooting need it. Hiding that too would mean pseudonymising every
+  mailbox, which costs more in daily operation than it buys against an
+  adversary who, by definition, already has repository access.
 - **The framework updates itself as root.** Anyone who can push to this
   repository can reach every agent within the hour. Treat write access here
   as production access.
