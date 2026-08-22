@@ -33,6 +33,15 @@ gh_cli() {
   fi
 }
 
+# ── Fremddaten entschärfen (Security-Audit 2026-08-22) ──
+# Issue-Titel/-Body sind von JEDEM GitHub-Nutzer frei wählbar. Sie werden
+# ausschliesslich als gequotete Argumente weitergereicht (nie in `bash -c`),
+# hier zusaetzlich Steuerzeichen entfernen und Laenge kappen.
+sanitize_text() {
+  # $1 = Text, $2 = max. Zeichen (Default 200)
+  printf '%s' "$1" | tr -d '\000-\037\177' | cut -c1-"${2:-200}"
+}
+
 # ── Issue-Details holen (Titel + Body + Labels) ──
 issue_info() {
   # $1 = Issue-Nummer; echo: TITLE|BODY|LABELS
@@ -129,21 +138,61 @@ try:
 except Exception as e:
     print(f"JSON-Fehler: {e}")
     sys.exit(1)
+
+# SECURITY (Audit-Befund #2): 'path' stammt aus der LLM-Antwort, und der
+# Issue-Body geht woertlich in den Prompt => per Prompt-Injection steuerbar.
+# Ohne Einsperrung waere das ein Schreibzugriff auf beliebige Dateien als root
+# (z.B. ../../../root/.ssh/authorized_keys). Daher: harte Containment-Pruefung
+# gegen realpath(repo), plus Ablehnung von .git/ und nicht-Text-Zielen.
+BASE = os.path.realpath(repo)
+ALLOWED_SUFFIXES = (".md", ".sh", ".py", ".js", ".yml", ".yaml", ".json", ".txt", "")
+
+def safe_target(rel):
+    """Gibt den absoluten Pfad zurueck - oder None, wenn er abzulehnen ist."""
+    if not isinstance(rel, str) or not rel.strip():
+        print("  ⛔ leerer Pfad — abgelehnt")
+        return None
+    if os.path.isabs(rel) or rel.startswith("~"):
+        print(f"  ⛔ absoluter Pfad abgelehnt: {rel}")
+        return None
+    target = os.path.realpath(os.path.join(BASE, rel))
+    if target != BASE and not target.startswith(BASE + os.sep):
+        print(f"  ⛔ Pfad ausserhalb des Repos abgelehnt: {rel}")
+        return None
+    inside = os.path.relpath(target, BASE)
+    if inside == ".git" or inside.startswith(".git" + os.sep):
+        print(f"  ⛔ Schreibzugriff auf .git/ abgelehnt: {rel}")
+        return None
+    if os.path.splitext(target)[1].lower() not in ALLOWED_SUFFIXES:
+        print(f"  ⛔ Dateityp nicht erlaubt: {rel}")
+        return None
+    if os.path.islink(target):
+        print(f"  ⛔ Symlink-Ziel abgelehnt: {rel}")
+        return None
+    return target
+
 files = data.get("files", [])
+if not isinstance(files, list):
+    print("  ⚠️  'files' ist keine Liste — nichts angewendet")
+    files = []
 for item in files:
-    path = os.path.join(repo, item["path"])
+    if not isinstance(item, dict):
+        continue
+    path = safe_target(item.get("path", ""))
+    if path is None:
+        continue
     action = item.get("action", "patch")
     if action == "create":
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
             f.write(item.get("new", ""))
-        print(f"  ✓ erstellt: {item['path']}")
+        print(f"  ✓ erstellt: {os.path.relpath(path, BASE)}")
     else:
         try:
             with open(path) as f:
                 content = f.read()
         except FileNotFoundError:
-            print(f"  ❌ nicht gefunden: {item['path']}")
+            print(f"  ❌ nicht gefunden: {os.path.relpath(path, BASE)}")
             continue
         old = item.get("old", "")
         new = item.get("new", "")
@@ -151,7 +200,7 @@ for item in files:
             content = content.replace(old, new, 1)
             with open(path, "w") as f:
                 f.write(content)
-            print(f"  ✓ gepatcht: {item['path']}")
+            print(f"  ✓ gepatcht: {os.path.relpath(path, BASE)}")
         elif old:
             # Fuzzy: erste Zeile von 'old' als Präfix suchen (Whitespace-tolerant)
             first_line = old.splitlines()[0].strip()[:30]
@@ -161,14 +210,14 @@ for item in files:
                         content = content.replace(line, new, 1)
                         with open(path, "w") as f:
                             f.write(content)
-                        print(f"  ✓ gepatcht (fuzzy): {item['path']}")
+                        print(f"  ✓ gepatcht (fuzzy): {os.path.relpath(path, BASE)}")
                         break
                 else:
-                    print(f"  ⚠️  'old' nicht gefunden (auch fuzzy nicht) in {item['path']} — übersprungen")
+                    print(f"  ⚠️  'old' nicht gefunden (auch fuzzy nicht) in {os.path.relpath(path, BASE)} — übersprungen")
             else:
-                print(f"  ⚠️  'old' leer — übersprungen: {item['path']}")
+                print(f"  ⚠️  'old' leer — übersprungen: {os.path.relpath(path, BASE)}")
         else:
-            print(f"  ⚠️  kein 'old' für {item['path']} — übersprungen")
+            print(f"  ⚠️  kein 'old' für {os.path.relpath(path, BASE)} — übersprungen")
         count = 1
 EOF
 }
@@ -254,13 +303,35 @@ Closes #$issue_num
         echo "  ⚠️  System-User '$sys_user' nicht gefunden — PR manuell: gh pr create --head $branch"
         return 0
       fi
+      # SECURITY (Audit-Befund #1): $title kommt aus einem GitHub-Issue und ist
+      # damit von jedem Fremden frei waehlbar. Frueher wurde es in einen
+      # `bash -c "..."`-String interpoliert => Command Injection als $sys_user.
+      # Jetzt: Werte NUR ueber env, inneres Skript in einem ZITIERTEN Heredoc
+      # (keine Expansion beim Schreiben), Body ueber --body-file.
       local tmpclone="/tmp/autofix-pr-$issue_num"
       rm -rf "$tmpclone" 2>/dev/null || true
-      sudo -u "$sys_user" bash -c "cd /tmp && GIT_SSH_COMMAND='ssh -i /home/$sys_user/.ssh/id_ed25519 -o IdentitiesOnly=yes' git clone -q -b '$branch' git@github.com:$GH_ORG/$PUBLIC_REPO.git '$tmpclone' 2>/dev/null && cd '$tmpclone' && gh pr create --repo $GH_ORG/$PUBLIC_REPO --title 'fix: $title' --body '🤖 Auto-Fix von Agent **$AGENT_NAME** für Issue #$issue_num.
-
-Closes #$issue_num
-
-*Generiert durch agent-mesh autofix (LLM-unterstützt). Bitte reviewen.*' --head '$branch'" 2>&1 | tail -1
+      local bodyfile; bodyfile=$(mktemp "/tmp/autofix-body-$issue_num.XXXXXX")
+      {
+        printf '%s\n\n' "🤖 Auto-Fix von Agent **$AGENT_NAME** für Issue #$issue_num."
+        printf 'Closes #%s\n\n' "$issue_num"
+        printf '%s\n' "*Generiert durch agent-mesh autofix (LLM-unterstützt). Bitte reviewen.*"
+      } > "$bodyfile"
+      chmod 644 "$bodyfile"
+      sudo -u "$sys_user" \
+        env SYS_USER="$sys_user" \
+            BRANCH="$branch" \
+            REPO_SLUG="$GH_ORG/$PUBLIC_REPO" \
+            PR_TITLE="fix: $(sanitize_text "$title" 200)" \
+            TMPCLONE="$tmpclone" \
+            BODYFILE="$bodyfile" \
+        bash -s << 'INNER_PR' 2>&1 | tail -1
+set -euo pipefail
+export GIT_SSH_COMMAND="ssh -i /home/$SYS_USER/.ssh/id_ed25519 -o IdentitiesOnly=yes"
+git clone -q -b "$BRANCH" "git@github.com:$REPO_SLUG.git" "$TMPCLONE" 2>/dev/null
+cd "$TMPCLONE"
+gh pr create --repo "$REPO_SLUG" --title "$PR_TITLE" --body-file "$BODYFILE" --head "$BRANCH"
+INNER_PR
+      rm -f "$bodyfile"
       rm -rf "$tmpclone" 2>/dev/null || true
     fi
   else

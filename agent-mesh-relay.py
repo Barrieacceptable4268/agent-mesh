@@ -33,6 +33,7 @@ import hmac
 import json
 import logging
 import os
+import re
 import sys
 import time
 
@@ -45,6 +46,17 @@ except ImportError:
 
 log = logging.getLogger("agent-mesh-relay")
 
+# SECURITY (Audit-Befund #3): Agent-Namen landen ueber queue_path() in einem
+# Dateipfad. os.path.join() verwirft das Praefix bei ABSOLUTEN Argumenten, und
+# "../" traegt ohnehin aus dem Queue-Verzeichnis heraus. Ohne Pruefung waere
+# jedes "to"-Feld ein Schreibzugriff und jeder Auth-Name ein os.remove() auf
+# einen beliebigen Pfad — als root. Deshalb: strikte Allowlist, ueberall.
+VALID_AGENT = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
+def valid_agent(name) -> bool:
+    return isinstance(name, str) and bool(VALID_AGENT.match(name))
+
 class Relay:
     def __init__(self, secret: str, queue_dir: str):
         self.secret = secret.encode()
@@ -55,12 +67,21 @@ class Relay:
 
     # ── Auth ──
     def check_auth(self, agent: str, token: str) -> bool:
+        if not valid_agent(agent) or not isinstance(token, str):
+            return False
         expected = hmac.new(self.secret, agent.encode(), hashlib.sha256).hexdigest()
         return hmac.compare_digest(expected, token)
 
     # ── Queue (Offline-Nachrichten) ──
     def queue_path(self, agent: str) -> str:
-        return os.path.join(self.queue_dir, f"{agent}.jsonl")
+        # Letzte Verteidigungslinie: nie einen ungeprueften Namen in einen Pfad
+        if not valid_agent(agent):
+            raise ValueError(f"ungueltiger Agent-Name: {agent!r}")
+        path = os.path.realpath(os.path.join(self.queue_dir, f"{agent}.jsonl"))
+        base = os.path.realpath(self.queue_dir)
+        if not path.startswith(base + os.sep):
+            raise ValueError(f"Queue-Pfad ausserhalb von {base}: {path}")
+        return path
 
     def save_offline(self, agent: str, msg: dict):
         with open(self.queue_path(agent), "a") as f:
@@ -136,6 +157,10 @@ class Relay:
                     to = data.get("to", "")
                     blob = data.get("blob", "")
                     if not to or not blob:
+                        continue
+                    if not valid_agent(to) or not isinstance(blob, str):
+                        log.warning("⛔ %s: ungueltiges Ziel abgelehnt (%r)", agent, to)
+                        await ws.send(json.dumps({"type": "error", "error": "invalid_recipient"}))
                         continue
                     # Nachricht weiterleiten (Blob bleibt verschlüsselt!)
                     log.info("📨 %s → %s (%d B)", agent, to, len(blob))
