@@ -282,7 +282,15 @@ cmd_autofix() {
     git push --quiet -u origin "$branch" 2>/dev/null || { echo "  ❌ Push fehlgeschlagen"; return 1; }
     # PR erstellen — gh läuft als eingeloggter User (udi), NICHT root.
     # /root ist für udi nicht durchquerbar → PR aus /tmp-Klon erstellen.
-    if [ -d "$FRAMEWORK_DIR" ] && [ "$(stat -c %U "$FRAMEWORK_DIR" 2>/dev/null)" = "$AGENT_NAME" ]; then
+    # stat -c ist GNU-only: auf macOS liefert es nichts, der Vergleich schlägt
+    # dort immer fehl und der sudo-Pfad wird genommen, auch wenn er unnötig
+    # wäre. Gleiche Falle wie im doctor — nach Plattform entscheiden.
+    local _owner
+    case "$(uname -s 2>/dev/null)" in
+      Darwin|*BSD*) _owner=$(stat -f %Su "$FRAMEWORK_DIR" 2>/dev/null || echo "") ;;
+      *)            _owner=$(stat -c %U  "$FRAMEWORK_DIR" 2>/dev/null || echo "") ;;
+    esac
+    if [ -d "$FRAMEWORK_DIR" ] && [ "$_owner" = "$AGENT_NAME" ]; then
       gh_cli pr create --repo "$GH_ORG/$PUBLIC_REPO" \
         --title "fix: $title" \
         --body "🤖 Auto-Fix von Agent **$AGENT_NAME** für Issue #$issue_num.

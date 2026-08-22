@@ -36,7 +36,15 @@ security_checks() {
   if [ -f "$AGE_KEY_FILE" ]; then
     pass "Eigener age-Key vorhanden: $AGE_KEY_FILE"
     local perm
-    perm=$(stat -f "%Lp" "$AGE_KEY_FILE" 2>/dev/null || stat -c "%a" "$AGE_KEY_FILE" 2>/dev/null || echo "?")
+    # BSD und GNU stat sind hier nicht austauschbar, und ein Fallback per ||
+    # reicht NICHT: GNU beendet sich zwar mit 1, schreibt vorher aber
+    # Dateisystem-Infos nach stdout — die Kommando-Substitution sammelt beides
+    # ein, und der Vergleich scheitert an korrekten Rechten. Also nach
+    # Plattform entscheiden statt zu probieren. (Fund vom ax41-Agenten.)
+    case "$(uname -s 2>/dev/null)" in
+      Darwin|*BSD*) perm=$(stat -f "%Lp" "$AGE_KEY_FILE" 2>/dev/null || echo "?") ;;
+      *)            perm=$(stat -c "%a" "$AGE_KEY_FILE" 2>/dev/null || echo "?") ;;
+    esac
     if [ "$perm" = "600" ] || [ "$perm" = "400" ]; then
       pass "Key-Dateirechte: $perm"
     else

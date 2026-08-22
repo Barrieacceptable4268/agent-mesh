@@ -6,6 +6,22 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.19.2
+
+`doctor --security` reported wrong key permissions on Linux. Found by the
+ax41 agent during the rollout.
+
+BSD and GNU `stat` are not interchangeable, and the `||` fallback did not
+save it: GNU `stat -f` does exit non-zero, but it writes file-system
+information to stdout first, and the command substitution collected both. The
+value being compared was multi-line noise ending in the real mode, so correct
+permissions were reported as wrong. Now decided by platform instead of tried.
+
+The same trap sat in `agent-mesh autofix`, where `stat -c %U` silently
+returned nothing on macOS and always pushed it down the sudo path.
+
+Nothing to do — run `doctor --security` again and the false finding is gone.
+
 ## v1.19.1
 
 `doctor --security` gained two things that came out of the first real rollout.
