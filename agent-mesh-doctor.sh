@@ -71,7 +71,8 @@ security_checks() {
   echo "── Key-Pinning (Befund #6) ──"
   local npins nkeys
   npins=$(grep -c "^PIN_" "$CONF" 2>/dev/null || echo 0)
-  nkeys=$(ls "$MEMORIES_DIR"/vault/keys/*.pub 2>/dev/null | wc -l | tr -d ' ')
+  nkeys=0
+  for _k in "$MEMORIES_DIR"/vault/keys/*.pub; do [ -f "$_k" ] && nkeys=$((nkeys+1)); done
   pass "$npins von $nkeys bekannten Agents gepinnt (wächst beim Benutzen)"
   local drift=0
   while IFS= read -r line; do
@@ -117,10 +118,11 @@ security_checks() {
     bad "Kein Signaturschlüssel — deine Nachrichten gelten als unbelegt"
     note "  agent-mesh sync   (legt ihn an und veröffentlicht ihn)"
   fi
-  local nsig
-  nsig=$(ls "$MEMORIES_DIR"/vault/keys/*.ssh.pub 2>/dev/null | wc -l | tr -d ' ')
-  local nage
-  nage=$(ls "$MEMORIES_DIR"/vault/keys/*.age.pub 2>/dev/null | wc -l | tr -d ' ')
+  # ls auf ein leeres Glob scheitert — unter "set -e" reisst das den ganzen
+  # Bericht ab, ausgerechnet bei Agents, die noch nichts veroeffentlicht haben.
+  local nsig=0 nage=0 k
+  for k in "$MEMORIES_DIR"/vault/keys/*.ssh.pub; do [ -f "$k" ] && nsig=$((nsig+1)); done
+  for k in "$MEMORIES_DIR"/vault/keys/*.age.pub; do [ -f "$k" ] && nage=$((nage+1)); done
   if [ "${nsig:-0}" -lt "${nage:-0}" ]; then
     bad "$nsig von $nage Agents haben einen Signaturschlüssel veröffentlicht"
     note "Nachrichten der übrigen erscheinen als UNSIGNIERT, bis sie einmal syncen."
@@ -152,6 +154,43 @@ security_checks() {
   else
     bad "Keine Vertrauensbasis für Release-Signaturen hinterlegt"
     note "Ohne sie verweigert jedes Update: agent-mesh trust"
+  fi
+
+  echo ""
+  echo "── Installationsorte ──"
+  # Ist /usr/local/bin nicht schreibbar (auf macOS als normaler Nutzer der
+  # Normalfall), installiert der Updater nach ~/.local/bin — und eine ältere
+  # Kopie in /usr/local/bin bleibt liegen. Ein Dienst, der dorthin zeigt,
+  # startet dann weiter den alten Stand, während "update" Erfolg meldet.
+  local found=0 stale=0 d probe fw
+  fw="$FRAMEWORK_DIR"
+  for d in /usr/local/bin "$HOME/.local/bin" /opt/homebrew/bin /usr/bin; do
+    [ -f "$d/agent-mesh" ] || continue
+    found=$((found+1))
+    local diffs=0 f base
+    for f in "$fw"/agent-mesh "$fw"/agent-mesh-*.sh "$fw"/agent-mesh-*.py "$fw"/agent-mesh-*.js; do
+      [ -f "$f" ] || continue
+      base=$(basename "$f")
+      [ -f "$d/$base" ] || continue
+      cmp -s "$f" "$d/$base" || diffs=$((diffs+1))
+    done
+    if [ "$diffs" -eq 0 ]; then
+      pass "$d — aktuell"
+    else
+      bad "$d — $diffs Datei(en) weichen vom Framework-Klon ab (veralteter Stand)"
+      stale=$((stale+1))
+    fi
+  done
+  if [ "$found" -eq 0 ]; then
+    bad "Keine Installation gefunden — läuft agent-mesh aus dem Klon?"
+  elif [ "$found" -gt 1 ]; then
+    bad "$found parallele Installationen — Dienste könnten auf die falsche zeigen"
+    note "Welche greift: $(command -v agent-mesh 2>/dev/null || echo '?')"
+    note "Überzählige entfernen oder den Dienst auf die aktuelle umbiegen."
+  fi
+  if [ "$stale" -gt 0 ]; then
+    note "Veraltete Kopie aktualisieren (ggf. mit sudo):"
+    note "  sudo cp \"$fw\"/agent-mesh \"$fw\"/agent-mesh-*.sh \"$fw\"/agent-mesh-*.py \"$fw\"/agent-mesh-*.js <ziel>/"
   fi
 
   echo ""

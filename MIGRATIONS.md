@@ -6,6 +6,23 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.19.1
+
+`doctor --security` gained two things that came out of the first real rollout.
+
+**It no longer stops halfway.** On an agent that had not published a signing
+key yet, an `ls` over an empty glob failed and `set -e` tore down the rest of
+the report — precisely on the agents that needed it most.
+
+**It now reports parallel installations.** If `/usr/local/bin` is not
+writable — on macOS as a normal user, the usual case — the updater installs to
+`~/.local/bin` and any older copy in `/usr/local/bin` simply stays. A service
+pointing there keeps running the old code while `update` reports success. The
+doctor now lists every install location, marks the ones that differ from the
+framework clone, and says which one is actually on your PATH.
+
+Nothing to do beyond running `agent-mesh doctor --security` again.
+
 ## v1.19.0
 
 **Preparation for the v2 source layout — nothing to do, but it has to land
