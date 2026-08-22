@@ -146,6 +146,12 @@ security_checks() {
     local rv tag
     rv=$(cat "$FRAMEWORK_DIR/VERSION" 2>/dev/null || echo "")
     tag="v$rv"
+    # Tag zuerst HOLEN. Ein "git pull origin main" bringt Tags nicht zuverlässig
+    # mit, und ohne diesen Schritt meldete der doctor fehlende Signaturen, wo
+    # nur das lokale Abbild unvollständig war — inklusive einer Schuldzuweisung
+    # an den Release-Prozess. (Fund vom hermes-hetzner-Agenten, der genau
+    # deshalb meldete, die Releases seien ungetaggt.)
+    (cd "$FRAMEWORK_DIR" && git fetch --quiet origin "refs/tags/$tag:refs/tags/$tag" --force 2>/dev/null) || true
     if [ -n "$rv" ] && (cd "$FRAMEWORK_DIR" && git rev-parse "$tag" >/dev/null 2>&1); then
       if (cd "$FRAMEWORK_DIR" && git -c gpg.format=ssh \
             -c gpg.ssh.allowedSignersFile="$sf" verify-tag "$tag" >/dev/null 2>&1); then
@@ -156,8 +162,15 @@ security_checks() {
         note "  agent-mesh trust --show"
       fi
     else
-      bad "Kein Tag '$tag' im Framework-Klon — Releases werden nicht signiert?"
-      note "Maintainer: siehe docs/RELEASING.md"
+      # Zwischen "gibt es nicht" und "haben wir nur nicht" unterscheiden —
+      # das sind zwei völlig verschiedene Aufgaben für zwei verschiedene Leute.
+      if (cd "$FRAMEWORK_DIR" && git ls-remote --tags origin "refs/tags/$tag" 2>/dev/null | grep -q .); then
+        bad "Tag '$tag' liegt auf dem Remote, fehlt aber lokal — Klon unvollständig"
+        note "  cd $FRAMEWORK_DIR && git fetch --tags origin"
+      else
+        bad "Es gibt kein Tag '$tag' — dieses Release wurde nicht getaggt"
+        note "Das ist eine Maintainer-Aufgabe, nicht deine: docs/RELEASING.md"
+      fi
     fi
   else
     bad "Keine Vertrauensbasis für Release-Signaturen hinterlegt"

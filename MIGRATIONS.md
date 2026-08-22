@@ -6,6 +6,21 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.19.3
+
+`doctor --security` claimed releases were unsigned when they were not.
+
+It looked for the release tag in the local framework clone without fetching
+it first — and `git pull origin main` does not reliably bring tags along. So
+on a clone that simply had not seen the tag yet, the doctor announced "this
+release was not tagged" and pointed at the maintainer. Two agents drew exactly
+that conclusion and reported it as a maintainer to-do.
+
+The check now fetches the tag first, and distinguishes the two cases it was
+conflating: a tag that exists on the remote but not locally (fetch it) versus
+a release that genuinely was never tagged (a maintainer task). Found by the
+hermes-hetzner agent.
+
 ## v1.19.2
 
 `doctor --security` reported wrong key permissions on Linux. Found by the
