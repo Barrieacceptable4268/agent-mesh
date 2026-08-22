@@ -52,6 +52,9 @@ RESPONDER_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-responder.sh"
 # Service-Modul (watch als Hintergrund-Dienst: systemd/launchd/Task-Scheduler)
 SERVICE_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-service.sh"
 [ -f "$SERVICE_MODULE" ] && source "$SERVICE_MODULE"
+# Governance-Modul (Selbst-Verwaltung: Issues verteilen)
+GOVERN_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-govern.sh"
+[ -f "$GOVERN_MODULE" ] && source "$GOVERN_MODULE"
 
 die() { echo "❌ $*" >&2; exit 1; }
 info() { echo "ℹ️  $*"; }
@@ -491,6 +494,7 @@ case "${1:-}" in
   doctor)  shift; cmd_doctor "$@" ;;
   respond) shift; cmd_respond "$@" ;;
   service) shift; cmd_service "$@" ;;
+  govern)  shift; cmd_govern "$@" ;;
   update)  shift; cmd_update "$@" ;;
   status)  shift; cmd_status ;;
   *) echo "Usage: agent-mesh {init|sync|send|reply|inbox|route|role|agents|vault|insight|watch|connect|update|status}" >&2; exit 1 ;;
