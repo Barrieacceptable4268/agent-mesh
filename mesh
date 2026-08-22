@@ -34,6 +34,9 @@ FRAMEWORK_DIR="$MESH_HOME/framework"        # Klon des public Repos
 # A2A-Modul (Agent-to-Agent, Rollen, Hub-Routing) einbinden
 A2A_MODULE="$(dirname "$(readlink -f "$0")")/mesh-a2a.sh"
 [ -f "$A2A_MODULE" ] && source "$A2A_MODULE"
+# Update-Modul einbinden (mesh update / --check / --hermes)
+UPDATE_MODULE="$(dirname "$(readlink -f "$0")")/mesh-update.sh"
+[ -f "$UPDATE_MODULE" ] && source "$UPDATE_MODULE"
 
 die() { echo "❌ $*" >&2; exit 1; }
 info() { echo "ℹ️  $*"; }
@@ -313,8 +316,9 @@ case "${1:-}" in
              *) die "vault: {set|get|list|add-key}" ;;
            esac ;;
   insight) shift; cmd_insight "$@" ;;
+  update)  shift; cmd_update "$@" ;;
   status)  shift; cmd_status ;;
-  *) echo "Usage: mesh {init|sync|send|reply|inbox|route|role|agents|vault|insight|status}" >&2; exit 1 ;;
+  *) echo "Usage: mesh {init|sync|send|reply|inbox|route|role|agents|vault|insight|update|status}" >&2; exit 1 ;;
 esac
 }
 main "$@"
