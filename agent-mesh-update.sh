@@ -82,7 +82,10 @@ cmd_update() {
   if [ "$(local_version)" != "$remote" ] || [ "${1:-}" = "--force" ]; then
     echo "── Pull vom public Repo ──"
     if [ -d "$FRAMEWORK_DIR/.git" ]; then
-      (cd "$FRAMEWORK_DIR" && git pull --rebase origin main 2>&1 | tail -2)
+      # Framework-Klon ist nur ein Cache — lokale Änderungen (z.B. Test-VERSION)
+      # sind safe zu verwerfen/stashen. Erst versuchen sauber zu pullen, sonst hard-reset.
+      (cd "$FRAMEWORK_DIR" && git pull --rebase origin main 2>&1 | tail -1) \
+        || (cd "$FRAMEWORK_DIR" && git stash 2>/dev/null; git reset --hard origin/main 2>&1 | tail -1)
     else
       # Repo fehlt → klonen
       GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-}" git clone "git@github.com:$GH_ORG/$PUBLIC_REPO.git" "$FRAMEWORK_DIR" 2>&1 | tail -1
