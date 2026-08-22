@@ -45,7 +45,7 @@ command -v hermes >/dev/null 2>&1 || warn "hermes fehlt — Wissen-Export nur mi
 
 # ── 2. Framework-Dateien holen ──
 say "Lade Framework vom public Repo ($REPO@$BRANCH)…"
-for f in agent-mesh agent-mesh-a2a.sh agent-mesh-update.sh agent-mesh-webhook.py agent-mesh-watch.sh agent-mesh-connect.sh agent-mesh-watch.service; do
+for f in agent-mesh agent-mesh-a2a.sh agent-mesh-update.sh agent-mesh-webhook.py agent-mesh-watch.sh agent-mesh-connect.sh agent-mesh-watch.service agent-mesh-doctor.sh; do
   curl -fsSL "$RAW/$f" -o "$BIN_DIR/$f" 2>/dev/null \
     || die "Download fehlgeschlagen: $f (Netz? Repo-Name?)"
   chmod +x "$BIN_DIR/$f" 2>/dev/null || true
@@ -93,6 +93,17 @@ if [ "${AGENT_MESH_SKIP_INIT:-0}" != "1" ]; then
   AGENT_MESH_HOME="$AGENT_MESH_HOME" "$BIN_DIR/agent-mesh" sync || warn "Sync meldete einen Fehler — Details oben."
   say "Status:"
   AGENT_MESH_HOME="$AGENT_MESH_HOME" "$BIN_DIR/agent-mesh" status || true
+
+  # ── Issue #1: Install-Post-Check — Repos wirklich geklont? ──
+  if [ ! -d "$AGENT_MESH_HOME/memories/.git" ]; then
+    warn "⚠️  Privates Repo wurde NICHT geklont (fehlender Git-Zugang?)"
+    warn "    → 'agent-mesh connect' (Browser-Auth) ausführen, dann 'agent-mesh init <name>' erneut"
+  fi
+  if [ ! -d "$AGENT_MESH_HOME/framework/.git" ]; then
+    warn "⚠️  Framework-Repo nicht geklont — Self-Update ist dann nicht verfügbar"
+  fi
+  # Doctor als Abschluss-Check (falls verfügbar)
+  AGENT_MESH_HOME="$AGENT_MESH_HOME" "$BIN_DIR/agent-mesh" doctor --vault 2>/dev/null | tail -4 || true
 fi
 
 # ── 6. Auto-Sync-Daemon einrichten (damit der Agent OHNE Zutun aktuell bleibt!) ──

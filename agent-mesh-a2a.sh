@@ -40,7 +40,7 @@ update_card() {
   local f; f=$(card_path)
   mkdir -p "$(dirname "$f")"
   if [ -f "$f" ]; then
-    python3 - "$f" "$1" << 'PYEOF'
+    "$PYTHON_BIN" - "$f" "$1" << 'PYEOF'
 import json, sys
 path, merge = sys.argv[1], json.loads(sys.argv[2])
 with open(path) as fh: card = json.load(fh)
@@ -48,7 +48,7 @@ card.update(merge)
 with open(path, "w") as fh: json.dump(card, fh, indent=2, ensure_ascii=False)
 PYEOF
   else
-    python3 - "$f" "$1" << 'PYEOF'
+    "$PYTHON_BIN" - "$f" "$1" << 'PYEOF'
 import json, sys
 path, merge = sys.argv[1], json.loads(sys.argv[2])
 card = {"agent": "", "role": "worker", "capabilities": [], "endpoint": None}
@@ -77,13 +77,19 @@ encrypt_text() {
   # $1 = Empfänger-Key (bech32), $2 = Klartext
   local recipient="$1" text="$2" tmp
   tmp=$(mktemp)
-  python3 - "$tmp" "$text" << 'EOF'
+  "$PYTHON_BIN" - "$tmp" "$text" << 'EOF'
 import json, sys
 with open(sys.argv[1], "w") as f: json.dump({"text": sys.argv[2]}, f)
 EOF
-  SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops --encrypt \
-    --age "$recipient" --input-type json --output-type yaml "$tmp" 2>/dev/null \
-    || die "Verschlüsselung fehlgeschlagen"
+  if ! SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops --encrypt \
+    --age "$recipient" --input-type json --output-type yaml "$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    # Issue #2: klare, plattformspezifische Diagnose statt kryptischem Fehler!
+    die "Verschlüsselung fehlgeschlagen. sops nicht gefunden oder Age-Key nicht nutzbar.
+  → Diagnose: 'agent-mesh doctor --vault'
+  → sops installieren: macOS 'brew install sops' · Windows 'scoop install sops' · Linux 'apt install sops'
+  → Sicherheit: KEIN Fallback auf Klartext — Nachricht wird nicht gesendet."
+  fi
   rm -f "$tmp"
 }
 
@@ -131,7 +137,7 @@ cmd_reply() {
   orig=$(find "$MESSAGES_DIR" -name "$reply_to.json" 2>/dev/null | head -1)
   [ -n "$orig" ] || die "Original-Nachricht $reply_to nicht gefunden"
   local from
-  from=$(python3 -c "import json; print(json.load(open('$orig'))['from'])")
+  from=$("$PYTHON_BIN" -c "import json; print(json.load(open('$orig'))['from'])")
   local id; id=$(next_msg_id)
   mkdir -p "$MESSAGES_DIR/$from"
 
@@ -169,7 +175,7 @@ cmd_inbox() {
     # Nur .json (nicht .enc) verarbeiten
     case "$f" in *.enc) continue;; esac
     any=1
-    python3 - "$f" "$f.enc" "$AGE_KEY_FILE" << 'PYEOF'
+    "$PYTHON_BIN" - "$f" "$f.enc" "$AGE_KEY_FILE" << 'PYEOF'
 import json, os, subprocess, sys
 meta_path, enc_path, keyfile = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
@@ -225,7 +231,7 @@ cmd_route() {
   [ $# -ge 2 ] || die "Usage: agent-mesh route <empfaenger> <text>  (nur als Rolle hub)"
   local card; card=$(get_card)
   local myrole
-  myrole=$(echo "$card" | python3 -c "import json,sys; print(json.load(sys.stdin).get('role','worker'))")
+  myrole=$(echo "$card" | "$PYTHON_BIN" -c "import json,sys; print(json.load(sys.stdin).get('role','worker'))")
   [ "$myrole" = "hub" ] || die "Nur der Hub kann routen (deine Rolle: $myrole)."
   cmd_send "$@"
 }
@@ -235,7 +241,7 @@ cmd_agents() {
   info "Agenten im Mesh (aus dem privaten Repo):"
   for card in "$MEMORIES_DIR"/agents/*/card.json; do
     [ -f "$card" ] || continue
-    python3 - "$card" << 'PYEOF'
+    "$PYTHON_BIN" - "$card" << 'PYEOF'
 import json, sys
 c = json.load(open(sys.argv[1]))
 caps = ", ".join(c.get("capabilities", []) or []) or "—"

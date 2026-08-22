@@ -43,9 +43,44 @@ WATCH_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-watch.sh"
 # Connect-Modul (User-Autorisierung: GitHub-Account verknüpfen)
 CONNECT_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-connect.sh"
 [ -f "$CONNECT_MODULE" ] && source "$CONNECT_MODULE"
+# Doctor-Modul (Preflight-Checks: Vault, Netz, Abhängigkeiten)
+DOCTOR_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-doctor.sh"
+[ -f "$DOCTOR_MODULE" ] && source "$DOCTOR_MODULE"
 
 die() { echo "❌ $*" >&2; exit 1; }
 info() { echo "ℹ️  $*"; }
+warn() { echo "⚠️  $*" >&2; }
+
+# ── Windows/Git-Bash-Kompatibilitäts-Layer (Issue #1, #2 — 2026-08-22) ──
+# Python: "$PYTHON_BIN" auf POSIX, python auf Windows (kein "$PYTHON_BIN"-Alias)
+PYTHON_BIN="${PYTHON_BIN:-}"
+if [ -z "$PYTHON_BIN" ]; then
+  if command -v "$PYTHON_BIN" >/dev/null 2>&1; then PYTHON_BIN="$PYTHON_BIN"
+  elif command -v python >/dev/null 2>&1; then PYTHON_BIN=python
+  else die "Python fehlt — bitte installieren (https://www.python.org)"; fi
+fi
+
+# age/age-keygen: .exe-Suffix auf Windows auflösen
+AGE_BIN="${AGE_BIN:-}"
+if [ -z "$AGE_BIN" ]; then
+  if command -v age >/dev/null 2>&1; then AGE_BIN=age
+  elif command -v age.exe >/dev/null 2>&1; then AGE_BIN=age.exe
+  else AGE_BIN=age; fi  # wird beim Nutzen geprüft
+fi
+AGE_KEYGEN_BIN="${AGE_KEYGEN_BIN:-}"
+if [ -z "$AGE_KEYGEN_BIN" ]; then
+  if command -v age-keygen >/dev/null 2>&1; then AGE_KEYGEN_BIN=age-keygen
+  elif command -v age-keygen.exe >/dev/null 2>&1; then AGE_KEYGEN_BIN=age-keygen.exe
+  else AGE_KEYGEN_BIN=age-keygen; fi
+fi
+
+# MSYS-Pfad → Windows-Pfad konvertieren (für native .exe-Argumente)
+winpath() {
+  case "$(uname -s 2>/dev/null)" in
+    MINGW*|MSYS*|CYGWIN*) cygpath -w "$1" 2>/dev/null || echo "$1" ;;
+    *) echo "$1" ;;
+  esac
+}
 
 # ─────────────────────────── Konfiguration ───────────────────────────
 load_conf() {
@@ -61,17 +96,32 @@ load_conf() {
 }
 
 # ─────────────────────────── init ───────────────────────────
+# Git-Protokoll ableiten: HTTPS wenn gh eingeloggt (OAuth), sonst SSH (opt-in)
+git_clone_url() {
+  # $1 = Repo-Name (z.B. agent-mesh-memories)
+  if gh auth status >/dev/null 2>&1; then
+    echo "https://github.com/$GH_ORG/$1.git"
+  else
+    echo "git@github.com:$GH_ORG/$1.git"
+  fi
+}
+
 cmd_init() {
   [ $# -ge 1 ] || die "Usage: agent-mesh init <agent-name>"
   local name="$1"
   [ -f "$CONF" ] && die "Bereits initialisiert ($(grep AGENT_NAME= "$CONF")). Für Neustart: rm -rf $AGENT_MESH_HOME"
-  mkdir -p "$AGENT_MESH_HOME/keys" "$MEMORIES_DIR" "$FRAMEWORK_DIR"
+  # Issue #1: NUR keys/ vorab anlegen — Klon-Ziele NICHT (git clone braucht leere/nicht existente Ziele)
+  mkdir -p "$AGENT_MESH_HOME/keys"
 
-  # age-Keypaar für diesen Agent
-  age-keygen -o "$AGENT_MESH_HOME/keys/$name.age" 2>/dev/null
+  # age-Keypaar für diesen Agent (Windows: .exe + Pfad-Konvertierung)
+  command -v "$AGE_KEYGEN_BIN" >/dev/null 2>&1 || die "age-keygen fehlt — bitte installieren (https://github.com/FiloSottile/age/releases)"
+  "$AGE_KEYGEN_BIN" -o "$(winpath "$AGENT_MESH_HOME/keys/$name.age")" 2>/dev/null \
+    || "$AGE_KEYGEN_BIN" -o "$AGENT_MESH_HOME/keys/$name.age" 2>/dev/null \
+    || die "age-keygen fehlgeschlagen (Ausgabe-Pfad prüfen)"
   local pub
-  pub=$(age-keygen -y "$AGENT_MESH_HOME/keys/$name.age")
-  chmod 600 "$AGENT_MESH_HOME/keys/$name.age"
+  pub=$("$AGE_KEYGEN_BIN" -y "$AGENT_MESH_HOME/keys/$name.age" 2>/dev/null || true)
+  [ -n "$pub" ] || die "age-Key konnte nicht gelesen werden"
+  chmod 600 "$AGENT_MESH_HOME/keys/$name.age" 2>/dev/null || true
 
   cat > "$CONF" << EOF
 # Agent-Mesh Konfiguration (lokal, nie committen)
@@ -80,13 +130,24 @@ AGE_PUB=$pub
 EOF
   chmod 600 "$CONF"
 
-  # Repos klonen
+  # Repos klonen — Protokoll aus gh ableiten (Issue #1: OAuth/HTTPS-konsistent!)
   info "Klonen: $GH_ORG/$PRIVATE_REPO …"
-  git clone "git@github.com:$GH_ORG/$PRIVATE_REPO.git" "$MEMORIES_DIR" 2>/dev/null \
-    || { info "Privates Repo existiert evtl. noch nicht — lege Verzeichnis an"; mkdir -p "$MEMORIES_DIR"; }
+  if ! git clone "$(git_clone_url "$PRIVATE_REPO")" "$MEMORIES_DIR" 2>/dev/null; then
+    # Ziel existiert evtl. (vom alten Verhalten) — nur klonen wenn es kein Git-Repo ist
+    if [ -d "$MEMORIES_DIR/.git" ]; then
+      info "Klon existiert bereits (Git-Repo) — überspringe."
+    else
+      rm -rf "$MEMORIES_DIR" 2>/dev/null || true
+      die "❌ Konnte privates Repo NICHT klonen — prüfe Zugriff auf $GH_ORG/$PRIVATE_REPO"
+    fi
+  fi
   info "Klonen: $GH_ORG/$PUBLIC_REPO …"
-  git clone "git@github.com:$GH_ORG/$PUBLIC_REPO.git" "$FRAMEWORK_DIR" 2>/dev/null \
-    || info "Public-Repo existiert evtl. noch nicht."
+  if ! git clone "$(git_clone_url "$PUBLIC_REPO")" "$FRAMEWORK_DIR" 2>/dev/null; then
+    if [ ! -d "$FRAMEWORK_DIR/.git" ]; then
+      # Public-Repo ist optional (Framework kann auch via install.sh kommen) — aber warnen
+      warn "Public-Repo nicht geklont (optional — Framework-Dateien kommen ggf. vom Installer)"
+    fi
+  fi
 
   # Agent-Ordner anlegen
   mkdir -p "$MEMORIES_DIR/agents/$name/skills" "$MEMORIES_DIR/agents/$name/insights" \
@@ -96,7 +157,7 @@ EOF
   echo "$pub" > "$MEMORIES_DIR/vault/keys/$name.age.pub"
   info "✅ Agent '$name' initialisiert (age-Key: $AGENT_MESH_HOME/keys/$name.age)"
   info "   Public-Key registriert: vault/keys/$name.age.pub"
-  info "   Nächster Schritt: mesh sync (pusht die Registrierung)"
+  info "   Nächster Schritt: agent-mesh sync (pusht die Registrierung)"
 }
 
 # ─────────────────────────── sync ───────────────────────────
@@ -127,7 +188,7 @@ cmd_sync() {
       mkdir -p "$agent_dir/skills"
       # agent-erstellte Skills aus .usage.json ermitteln (created_by: agent)
       if [ -f "$HOME/.hermes/skills/.usage.json" ]; then
-        python3 - "$HOME/.hermes/skills/.usage.json" "$agent_dir/skills" "$HOME/.hermes/skills" << 'PYEOF'
+        "$PYTHON_BIN" - "$HOME/.hermes/skills/.usage.json" "$agent_dir/skills" "$HOME/.hermes/skills" << 'PYEOF'
 import json, os, sys, shutil
 usage_path, dest, src_root = sys.argv[1], sys.argv[2], sys.argv[3]
 try:
@@ -211,7 +272,7 @@ cmd_vault_set() {
 
   # Wert als JSON ablegen
   local tmp; tmp=$(mktemp)
-  python3 - "$tmp" "$key" "$value" << 'EOF'
+  "$PYTHON_BIN" - "$tmp" "$key" "$value" << 'EOF'
 import json, sys
 path, key, value = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(path, "w") as f: json.dump({key: value}, f, indent=2)
@@ -238,7 +299,7 @@ cmd_vault_get() {
   local tmp; tmp=$(mktemp)
   SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops -d --output-type json "$vf" > "$tmp" 2>/dev/null \
     || die "Entschlüsselung fehlgeschlagen (dein Key ist kein Empfänger dieses Secrets)"
-  python3 - "$tmp" "$1" << 'EOF'
+  "$PYTHON_BIN" - "$tmp" "$1" << 'EOF'
 import json, sys
 with open(sys.argv[1]) as f: data = json.load(f)
 print(data.get(sys.argv[2], ""))
@@ -293,7 +354,7 @@ cmd_vault_revoke() {
   # Security v1.1 HÄRTUNG: Der Hub (Rolle=hub) darf NICHT still revoken —
   # doppelte Bestätigung + Warnung, wer da gerade entfernt wird!
   local myrole
-  myrole=$(get_card | python3 -c "import json,sys; print(json.load(sys.stdin).get('role','worker'))" 2>/dev/null || echo "worker")
+  myrole=$(get_card | "$PYTHON_BIN" -c "import json,sys; print(json.load(sys.stdin).get('role','worker'))" 2>/dev/null || echo "worker")
   if [ "$agent" = "$AGENT_NAME" ]; then
     die "❌ Du kannst dich nicht selbst widerrufen! (Rolle: $myrole)"
   fi
@@ -390,7 +451,7 @@ cmd_status() {
       [ -d "$d" ] && echo "  • $(basename "$d")"
     done
     if [ -f "$MEMORIES_DIR/vault/secrets.yaml" ]; then
-      info "Vault: vorhanden ($(sops --input-type yaml --output-type json -d "$MEMORIES_DIR/vault/secrets.yaml" 2>/dev/null | python3 -c "import json,sys; print(len(json.load(sys.stdin)), 'Secrets')" 2>/dev/null || echo '?'))"
+      info "Vault: vorhanden ($(sops --input-type yaml --output-type json -d "$MEMORIES_DIR/vault/secrets.yaml" 2>/dev/null | "$PYTHON_BIN" -c "import json,sys; print(len(json.load(sys.stdin)), 'Secrets')" 2>/dev/null || echo '?'))"
     fi
   fi
 }
@@ -420,6 +481,7 @@ case "${1:-}" in
   insight) shift; cmd_insight "$@" ;;
   watch)   shift; cmd_watch "$@" ;;
   connect) shift; cmd_connect "$@" ;;
+  doctor)  shift; cmd_doctor "$@" ;;
   update)  shift; cmd_update "$@" ;;
   status)  shift; cmd_status ;;
   *) echo "Usage: agent-mesh {init|sync|send|reply|inbox|route|role|agents|vault|insight|watch|connect|update|status}" >&2; exit 1 ;;
