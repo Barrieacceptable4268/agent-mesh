@@ -188,17 +188,18 @@ security_checks() {
   for d in /usr/local/bin "$HOME/.local/bin" /opt/homebrew/bin /usr/bin; do
     [ -f "$d/agent-mesh" ] || continue
     found=$((found+1))
-    local diffs=0 f base
+    local diffs=0 f base difflist=""
     for f in "$fw"/agent-mesh "$fw"/agent-mesh-*.sh "$fw"/agent-mesh-*.py "$fw"/agent-mesh-*.js; do
       [ -f "$f" ] || continue
       base=$(basename "$f")
       [ -f "$d/$base" ] || continue
-      cmp -s "$f" "$d/$base" || diffs=$((diffs+1))
+      if ! cmp -s "$f" "$d/$base"; then diffs=$((diffs+1)); difflist="$difflist $base"; fi
     done
     if [ "$diffs" -eq 0 ]; then
       pass "$d — aktuell"
     else
-      bad "$d — $diffs Datei(en) weichen vom Framework-Klon ab (veralteter Stand)"
+      # "1 Datei weicht ab" ist keine handlungsfähige Aussage — welche?
+      bad "$d — $diffs Datei(en) weichen ab: $(echo "$difflist" | sed 's/^ //' | cut -c1-70)"
       stale=$((stale+1))
     fi
   done
@@ -316,6 +317,59 @@ report_facts() {
     R_BAD=$(printf '%s\n' "$out" | grep -c "❌" || true)
     R_ISSUES=$(printf '%s\n' "$out" | grep "❌" | sed 's/^ *//' | head -8 || true)
   fi
+}
+
+# ── agent-mesh doctor --fix ────────────────────────────────────────────────
+# AUSSCHLIESSLICH Reparaturen, die nachweislich nichts kaputt machen können:
+# eigene Schlüsselrechte verschärfen und eine funktionslose Konfigurationszeile
+# entfernen. Alles, was Urteilsvermögen braucht — ein Schlüsselwechsel, das
+# Überschreiben einer Installation, ein Dienst-Neustart — bleibt bewusst
+# draussen und wird nur benannt. Diese Trennung ist der Grund, warum --fix auch
+# per Wartungs-Broadcast laufen darf.
+doctor_fix() {
+  local fixed=0 f
+  echo "🔧 Sichere Reparaturen"
+
+  # a) Rechte auf eigenen privaten Schlüsseln
+  for f in "$AGENT_MESH_HOME/keys/"*.age "$AGENT_MESH_HOME/keys/"*.ssh; do
+    [ -f "$f" ] || continue
+    local perm
+    case "$(uname -s 2>/dev/null)" in
+      Darwin|*BSD*) perm=$(stat -f "%Lp" "$f" 2>/dev/null || echo "?") ;;
+      *)            perm=$(stat -c "%a" "$f" 2>/dev/null || echo "?") ;;
+    esac
+    if [ "$perm" != "600" ] && [ "$perm" != "400" ]; then
+      if chmod 600 "$f" 2>/dev/null; then
+        echo "  ✓ $(basename "$f"): $perm → 600"
+        fixed=$((fixed+1))
+      else
+        echo "  ❌ $(basename "$f"): chmod fehlgeschlagen"
+      fi
+    fi
+  done
+
+  # b) Funktionsloses Relay-Token aus der Konfiguration
+  if grep "^AGENT_MESH_RELAY_TOKEN=" "$CONF" >/dev/null 2>&1; then
+    local tmp; tmp=$(mktemp)
+    if grep -v "^AGENT_MESH_RELAY_TOKEN=" "$CONF" > "$tmp" 2>/dev/null \
+       && [ -s "$tmp" ] && cp "$CONF" "$CONF.bak" && cat "$tmp" > "$CONF"; then
+      echo "  ✓ AGENT_MESH_RELAY_TOKEN entfernt (Sicherung: $CONF.bak)"
+      fixed=$((fixed+1))
+    else
+      echo "  ❌ Konfiguration konnte nicht bereinigt werden"
+    fi
+    rm -f "$tmp"
+  fi
+
+  [ "$fixed" -eq 0 ] && echo "  nichts zu tun"
+
+  echo ""
+  echo "Nicht automatisch behoben (braucht eine Entscheidung oder Rechte):"
+  echo "  · abweichende Dateien in einem Installationsverzeichnis → sudo cp aus dem Framework-Klon"
+  echo "  · Schlüsselwechsel eines anderen Agents → agent-mesh vault repin <agent>"
+  echo "  · Dienste (Relay, Dashboard, watch) → neu starten"
+  echo "  Vollständiger Befund: agent-mesh doctor --security"
+  return 0
 }
 
 # ── agent-mesh fleet ───────────────────────────────────────────────────────
@@ -470,10 +524,15 @@ cmd_doctor() {
   [ "${1:-}" = "--vault" ] && mode="vault"
   [ "${1:-}" = "--net" ] && mode="net"
   [ "${1:-}" = "--security" ] && mode="security"
+  [ "${1:-}" = "--fix" ] && mode="fix"
 
   load_conf
   if [ "$mode" = "security" ]; then
     security_checks
+    return 0
+  fi
+  if [ "$mode" = "fix" ]; then
+    doctor_fix
     return 0
   fi
 

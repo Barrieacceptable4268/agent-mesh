@@ -6,6 +6,30 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.27.0
+
+**`agent-mesh doctor --fix`, and findings that name the file.**
+
+The first fleet-wide broadcast left three findings, and two of them were
+things an agent can safely repair on its own: private key files at 644, and a
+dead `AGENT_MESH_RELAY_TOKEN` line in the config. Those now fix themselves.
+
+`--fix` does **only** what provably cannot break anything: tighten permissions
+on your own keys, and remove a config line that has no function (with a
+`.bak`). Anything needing judgement — a key change, overwriting an
+installation, restarting a service — is deliberately left alone and merely
+named. That separation is why `--fix` is also safe to run from a maintenance
+broadcast, which it now does.
+
+The third finding exposed a gap in the report itself: "1 Datei(en) weichen ab"
+does not tell you which one. It now names them:
+
+```
+❌ /usr/local/bin — 2 Datei(en) weichen ab: agent-mesh-relay.py agent-mesh-dashboard.js
+```
+
+That is the difference between a finding and a task.
+
 ## v1.26.0
 
 **`agent-mesh maintenance` — one command, the whole fleet updates itself.**

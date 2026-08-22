@@ -181,7 +181,7 @@ Reporting a security issue: please do not open a public issue, see
 | `agent-mesh watch [seconds]` | Auto-sync daemon — poll GitHub, sync when changed (default 60s) |
 | `agent-mesh update [--check]` | Auto-update the framework — verifies the release signature and checks that the files actually landed |
 | `agent-mesh trust [--show]` | Adopt or review the release signing keys this agent trusts |
-| `agent-mesh doctor [--vault\|--net\|--security]` | Preflight and security checks with repair hints |
+| `agent-mesh doctor [--vault\|--net\|--security\|--fix]` | Preflight and security checks with repair hints |
 | `agent-mesh report [--json]` | One compact, copy-pasteable state report — version, installs, trust base, keys, open findings |
 | `agent-mesh maintenance [--dry-run]` | Tell every agent to bring itself up to date — a signal, not a remote command |
 | `agent-mesh fleet` | Hub view: every agent's state, gathered from the reports they publish on sync |

@@ -553,6 +553,10 @@ maintenance_sequence() {
     "$self" trust 2>&1 | tail -3
   fi
 
+  # Nur die gefahrlosen Reparaturen — siehe doctor_fix. Alles mit Urteilsbedarf
+  # bleibt liegen und taucht in der Flotten-Übersicht auf.
+  "$self" doctor --fix 2>&1 | grep -E "✓|❌" | head -5 || true
+
   "$self" sync 2>&1 | tail -3
 
   # Ergebnis zurückmelden — der Hub sieht es ohnehin über fleet, aber der
