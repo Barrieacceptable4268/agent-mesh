@@ -1,8 +1,10 @@
 # Agent-Mesh
 
-Connect multiple **Hermes agents** into a knowledge network: they exchange
-memories, skills, and insights, and share secrets through an encrypted vault —
-"make each other smarter" for your fleet of machines.
+**Connect your AI agents. Make them smarter together.**
+
+Agent-Mesh links multiple [Hermes agents](https://hermes-agent.nousresearch.com) into a
+knowledge network: shared memories, an encrypted vault, and agent-to-agent
+messaging with roles and a central hub.
 
 ```
 ┌─────────────────────────────────────────────┐
@@ -14,7 +16,7 @@ memories, skills, and insights, and share secrets through an encrypted vault —
 │  │  skills/ │          │   encrypted)    │ │
 │  └──────────┴──────────┴──────────────────┘ │
 └──────────────┬──────────────────────────────┘
-               │ git pull / push (webhook-triggered)
+               │ git push/pull (webhook: real-time)
      ┌─────────┴─────────┐
      │ Hermes Agent AX41 │    │ Hermes Agent Mac │
      └───────────────────┘    └──────────────────┘
@@ -22,105 +24,89 @@ memories, skills, and insights, and share secrets through an encrypted vault —
 
 - **Public repo** (`agent-mesh`): this framework — anyone can use it.
 - **Private repo** (`agent-mesh-memories`): the data (memories/skills/vault).
-  Memories are personal — never put them in the public repo.
+  Personal data never lives in the public repo.
 
-## Prerequisites (per machine)
+---
 
-- Git + SSH key on GitHub (git@github.com)
-- `age` and `sops` (vault)
-- `hermes` (for knowledge export; without Hermes only git sync works)
+## 🚀 Install (one command — works for humans AND agents)
 
-```bash
-# Debian/Ubuntu:
-apt install age
-curl -fsSL -o /tmp/sops.deb https://github.com/getsops/sops/releases/latest/download/sops_3.13.3_amd64.deb
-dpkg -i /tmp/sops.deb
-```
-
-## Quickstart (one machine = one agent)
+> Give an agent this repo (or the [website](https://agent-mesh.moinsen.dev)) and say:
+> **"Install yourself into the mesh."**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/moinsen-dev/agent-mesh/main/agent-mesh -o /usr/local/bin/agent-mesh
-chmod +x /usr/local/bin/agent-mesh
-
-agent-mesh init <agent-name>        # e.g. "ax41" or "macbook"
-agent-mesh sync                     # export knowledge + push (webhook-triggered after that)
-agent-mesh status                   # who is in the mesh?
+curl -fsSL https://raw.githubusercontent.com/moinsen-dev/agent-mesh/main/install.sh | bash
 ```
+
+That's it. The installer:
+
+1. Downloads the CLI (`agent-mesh`) + modules into `/usr/local/bin` (or `~/.local/bin`)
+2. Checks GitHub SSH access (prints setup steps if missing)
+3. Initializes your agent (name = hostname by default, or `AGENT_MESH_NAME=<name>`)
+4. Runs the first sync (exports your Hermes knowledge, pushes it)
+
+**Prerequisites:** `git`, `curl`, an SSH key on GitHub
+(`ssh-keygen -t ed25519` → add `~/.ssh/id_ed25519.pub` at
+github.com/settings/keys). `age` + `sops` enable the vault; `hermes` enables
+knowledge export — the installer checks all of them and tells you what's missing.
+
+### After install
+
+```bash
+agent-mesh role hub             # optional: make this agent the central hub (ONE per mesh)
+agent-mesh role specialist      # or: domain expert
+agent-mesh status               # see who's in the mesh
+```
+
+> **Hub:** the central point of contact. You talk to the hub once — it routes
+> messages to the right agent. No more relaying between machines manually.
+
+---
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `agent-mesh init <name>` | Create key pair + register this machine |
+| `agent-mesh sync` | Pull → export knowledge → push (webhook: instant) |
+| `agent-mesh status` | Who is in the mesh? Vault status? |
+| `agent-mesh vault set <key> <val>` | Store an encrypted secret (all agents) |
+| `agent-mesh vault get <key>` | Decrypt with your own key |
+| `agent-mesh vault list` | List secret keys |
+| `agent-mesh send <agent> <text>` | Send a message (git queue, no open ports) |
+| `agent-mesh reply <msg-id> <text>` | Reply (auto-finds the original) |
+| `agent-mesh inbox` | Read your mailbox |
+| `agent-mesh route <agent> <text>` | Hub only: route a message |
+| `agent-mesh role <hub\|worker\|specialist>` | Set your role (agent card) |
+| `agent-mesh agents` | Show all agent cards (roles) |
+| `agent-mesh insight add <text>` | Share a learning (markdown) |
+| `agent-mesh update [--check]` | Auto-update the framework (v-file) |
 
 ## Vault (shared secrets)
 
-Each agent has its own **age key** (`~/.hermes-mesh/keys/<name>.age`, chmod
-600, never committed). Secrets are encrypted with the public keys of **all**
-agents — everyone can read, nobody without a key.
+Each agent has its own **age key** (`~/.agent-mesh/keys/<name>.age`, chmod 600,
+never committed). Secrets are encrypted with the public keys of **all** agents
+via sops+age — everyone can read, nobody without a key. The vault repo is
+private. **Secrets belong only in the vault, never in memory/insights.**
 
-```bash
-agent-mesh vault set DB_PASSWORD "secret"   # store encrypted (all agents)
-agent-mesh vault get DB_PASSWORD            # decrypt with own key
-agent-mesh vault list                       # list key names
-```
+## Real-time triggering
 
-⚠ **Security:** The vault repo is private. Still: secrets belong only in the
-vault, never in memory/insights.
+A webhook listener (`agent-mesh-webhook.py`, systemd unit included) makes
+`sync` run **immediately** on every push — no cron waiting. HMAC signature
+verification (X-Hub-Signature-256) protects the endpoint; it binds to
+127.0.0.1 and is exposed only via your tunnel.
 
-## A2A — Agent-to-Agent communication
+## Onboarding
 
-Messages flow as JSON files through the **private repo** (git queue pattern):
-`messages/<recipient>/<id>.json`. The sender commits+pulls, the recipient
-pulls on `agent-mesh sync` and reads with `agent-mesh inbox`. No open ports needed.
+- Linux/macOS: [docs/ONBOARDING.md](docs/ONBOARDING.md)
+- Windows (git-bash + Task Scheduler): [docs/ONBOARDING-WINDOWS.md](docs/ONBOARDING-WINDOWS.md)
 
-```bash
-agent-mesh role hub|worker|specialist      # set own role (agent card)
-agent-mesh send <agent> <text>             # send a message
-agent-mesh reply <msg-id> <text>           # reply (auto-finds the original)
-agent-mesh inbox                           # read own mailbox
-agent-mesh route <agent> <text>            # hub only: route a message
-agent-mesh agents                          # show all agent cards (roles)
-```
+## Privacy
 
-**Roles:** `hub` = central point of contact (routes messages, knows
-everyone), `worker` = executes tasks (default), `specialist` = domain expert.
-Roles live in `agents/<name>/card.json` (in the private repo, visible to all).
+- **Public**: framework code only. No personal data.
+- **Private**: memories/skills/insights/vault. Never make it public.
+- Hermes profile export redacts secrets automatically; `agent-mesh sync`
+  exports agent-created skills only.
 
-### Real-time triggering (optional)
+## License
 
-A webhook listener (`agent-mesh-webhook.py`, systemd service) makes sync run
-**immediately** on every push — no waiting for the cron interval:
-
-1. Run `agent-mesh-webhook.py` on `127.0.0.1:8765` (systemd unit included in the
-   repo, secret in `mesh.conf`).
-2. Expose it via a tunnel (e.g. Cloudflare) — HMAC signature verification
-   (X-Hub-Signature-256) protects the endpoint.
-3. Create a GitHub webhook on the **private** repo: `push` event →
-   `https://mesh.<your-domain>/hook` with the secret.
-
-## Insights (sharing learnings)
-
-```bash
-agent-mesh insight add "GH-8: preparation: is ignored, profiles_ch: is required"
-```
-
-→ lands as Markdown in `agents/<name>/insights/` and is visible to all mesh
-agents (on next `agent-mesh sync`).
-
-## Automation (cron fallback)
-
-```bash
-# daily 06:00: pull → export → push (webhook makes this optional)
-echo "0 6 * * * root /usr/local/bin/agent-agent-mesh sync >> /var/log/mesh-sync.log 2>&1" \
-  > /etc/cron.d/mesh-sync
-```
-
-## Onboarding new agents
-
-See [docs/ONBOARDING.md](docs/ONBOARDING.md) (Linux/macOS) and
-[docs/ONBOARDING-WINDOWS.md](docs/ONBOARDING-WINDOWS.md) (Windows: git-bash,
-scoop, Task Scheduler).
-
-## Privacy notice
-
-- **Public**: framework code. No personal data.
-- **Private**: memories/skills/insights/vault. Personal — never make it public.
-- Hermes profile export redacts secrets automatically
-  (`_EXPORT_REDACT_NAMES`); additionally `agent-mesh sync` filters agent-created
-  skills only.
+MIT
