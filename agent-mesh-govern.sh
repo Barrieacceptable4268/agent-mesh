@@ -39,14 +39,16 @@ agent_for_issue() {
 cmd_govern() {
   load_conf
   local dry_run=0
+  local do_fix=0
   [ "${1:-}" = "--dry-run" ] && dry_run=1
   [ "${1:-}" = "--list" ] && { dry_run=1; }
+  [ "${1:-}" = "--fix" ] && do_fix=1
 
   command -v gh >/dev/null 2>&1 || { warn "gh fehlt — Governance braucht GitHub-CLI"; return 1; }
 
-  # Offene Issues holen
+  # Offene Issues holen (gh_cli — root hat kein gh-Auth, udi schon!)
   local issues
-  issues=$(gh issue list --repo "$GH_ORG/$PUBLIC_REPO" --state open --limit 20 --json number,title,labels --jq '.[] | "\(.number)|\(.title)"' 2>/dev/null || true)
+  issues=$(gh_cli issue list --repo "$GH_ORG/$PUBLIC_REPO" --state open --limit 20 --json number,title,labels --jq '.[] | "\(.number)|\(.title)"' 2>/dev/null || true)
   [ -n "$issues" ] || { info "Keine offenen Issues."; return 0; }
 
   echo "🔧 Agent-Mesh Governance — offene Issues:"
@@ -70,6 +72,12 @@ cmd_govern() {
       # Dokumentieren
       mkdir -p "$MEMORIES_DIR/.github"
       echo "| #$num | $title | $assignee | $(date -u +%Y-%m-%d) |" >> "$MEMORIES_DIR/$GOV_FILE" 2>/dev/null
+    fi
+
+    # ── AUTO-FIX-STUFE: Fix direkt ausführen (Hub hat gh + Key) ──
+    if [ "$do_fix" = "1" ] && [ "$dry_run" = "0" ]; then
+      echo "  ⚡ Auto-Fix für #$num starten…"
+      cmd_autofix "$num" 2>&1 | sed 's/^/    /'
     fi
   done
 

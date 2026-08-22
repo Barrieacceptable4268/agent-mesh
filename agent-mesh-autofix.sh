@@ -244,12 +244,18 @@ Closes #$issue_num
 *Generiert durch agent-mesh autofix (LLM-unterstützt). Bitte reviewen — bei Unklarheit nur Analyse, kein Code-Fix.*" \
         --head "$branch" 2>&1 | tail -1
     else
-      # tmp-Klon als eingeloggter User
-      local gh_user
-      gh_user=$(gh_cli api user --jq .login 2>/dev/null || echo "udi")
+      # tmp-Klon als eingeloggter SYSTEM-User (GitHub-Login ≠ System-User!)
+      # AGENT_MESH_SUDO_USER (Default: udi) konfigurierbar in conf
+      local sys_user
+      sys_user=$(grep "^AGENT_MESH_SUDO_USER=" "$CONF" | cut -d= -f2- || true)
+      [ -z "$sys_user" ] && sys_user="${AGENT_MESH_SUDO_USER:-udi}"
+      if ! id "$sys_user" >/dev/null 2>&1; then
+        echo "  ⚠️  System-User '$sys_user' nicht gefunden — PR manuell: gh pr create --head $branch"
+        return 0
+      fi
       local tmpclone="/tmp/autofix-pr-$issue_num"
       rm -rf "$tmpclone" 2>/dev/null || true
-      sudo -u "$gh_user" bash -c "cd /tmp && GIT_SSH_COMMAND='ssh -i /home/$gh_user/.ssh/id_ed25519 -o IdentitiesOnly=yes' git clone -q -b '$branch' git@github.com:$GH_ORG/$PUBLIC_REPO.git '$tmpclone' 2>/dev/null && cd '$tmpclone' && gh pr create --repo $GH_ORG/$PUBLIC_REPO --title 'fix: $title' --body '🤖 Auto-Fix von Agent **$AGENT_NAME** für Issue #$issue_num.
+      sudo -u "$sys_user" bash -c "cd /tmp && GIT_SSH_COMMAND='ssh -i /home/$sys_user/.ssh/id_ed25519 -o IdentitiesOnly=yes' git clone -q -b '$branch' git@github.com:$GH_ORG/$PUBLIC_REPO.git '$tmpclone' 2>/dev/null && cd '$tmpclone' && gh pr create --repo $GH_ORG/$PUBLIC_REPO --title 'fix: $title' --body '🤖 Auto-Fix von Agent **$AGENT_NAME** für Issue #$issue_num.
 
 Closes #$issue_num
 
