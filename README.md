@@ -113,7 +113,9 @@ echo "0 6 * * * root /usr/local/bin/mesh sync >> /var/log/mesh-sync.log 2>&1" \
 
 ## Onboarding new agents
 
-See [docs/ONBOARDING.md](docs/ONBOARDING.md).
+See [docs/ONBOARDING.md](docs/ONBOARDING.md) (Linux/macOS) and
+[docs/ONBOARDING-WINDOWS.md](docs/ONBOARDING-WINDOWS.md) (Windows: git-bash,
+scoop, Task Scheduler).
 
 ## Privacy notice
 
