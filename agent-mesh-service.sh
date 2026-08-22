@@ -85,6 +85,11 @@ EOF
     <string>-lc</string>
     <string>agent-mesh watch $interval</string>
   </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+    <key>PYTHON_BIN</key><string>python3</string>
+  </dict>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>$AGENT_MESH_HOME/watch.log</string>
