@@ -1,0 +1,305 @@
+#!/usr/bin/env bash
+# mesh — Agent-Mesh CLI: verbindet mehrere Hermes-Agents zu einem Wissens-Verbund.
+#
+# Repos:
+#   PUBLIC   <GH_ORG>/agent-mesh          — dieses Framework
+#   PRIVATE  <GH_ORG>/agent-mesh-memories — Memories, Skills, Vault (nie public!)
+#
+# Konzept:
+#   Jeder Rechner hat EINEN Agent (Namen aus mesh.conf). Der Agent exportiert
+#   sein Hermes-Wissen (MEMORY.md, USER.md, skills/, insights/) in das private
+#   Repo, pullt das Wissen der anderen Agents und teilt Secrets über das
+#   sops+age-Verschlüsselte Vault. Kein Secret liegt jemals im Klartext im Repo.
+#
+# Usage:
+#   mesh init <agent-name>          Erste Einrichtung (age-Key + Konfig)
+#   mesh sync                       Pull → Wissen exportieren/importieren → Push
+#   mesh vault set <key> <value>    Secret verschlüsselt ablegen
+#   mesh vault get <key>            Secret entschlüsselt ausgeben
+#   mesh vault list                 Alle Schlüssel auflisten (ohne Werte)
+#   mesh vault add-key <agent>      Agent-Key zum Vault hinzufügen
+#   mesh insight add <text>         Erkenntnis teilen (Markdown-Datei)
+#   mesh status                     Zusammenfassung
+
+set -euo pipefail
+
+MESH_HOME="${MESH_HOME:-$HOME/.hermes-mesh}"
+CONF="$MESH_HOME/mesh.conf"
+GH_ORG="${MESH_GH_ORG:-moinsen-dev}"
+PUBLIC_REPO="agent-mesh"
+PRIVATE_REPO="agent-mesh-memories"
+MEMORIES_DIR="$MESH_HOME/memories"          # Klon des privaten Repos
+FRAMEWORK_DIR="$MESH_HOME/framework"        # Klon des public Repos
+
+die() { echo "❌ $*" >&2; exit 1; }
+info() { echo "ℹ️  $*"; }
+
+# ─────────────────────────── Konfiguration ───────────────────────────
+load_conf() {
+  [ -f "$CONF" ] || die "Nicht initialisiert — zuerst: mesh init <agent-name>"
+  AGENT_NAME=$(grep "^AGENT_NAME=" "$CONF" | cut -d= -f2-)
+  AGE_PUB=$(grep "^AGE_PUB=" "$CONF" | cut -d= -f2-)
+  AGE_KEY_FILE="$MESH_HOME/keys/$AGENT_NAME.age"
+}
+
+# ─────────────────────────── init ───────────────────────────
+cmd_init() {
+  [ $# -ge 1 ] || die "Usage: mesh init <agent-name>"
+  local name="$1"
+  [ -f "$CONF" ] && die "Bereits initialisiert ($(grep AGENT_NAME= "$CONF")). Für Neustart: rm -rf $MESH_HOME"
+  mkdir -p "$MESH_HOME/keys" "$MEMORIES_DIR" "$FRAMEWORK_DIR"
+
+  # age-Keypaar für diesen Agent
+  age-keygen -o "$MESH_HOME/keys/$name.age" 2>/dev/null
+  local pub
+  pub=$(age-keygen -y "$MESH_HOME/keys/$name.age")
+  chmod 600 "$MESH_HOME/keys/$name.age"
+
+  cat > "$CONF" << EOF
+# Agent-Mesh Konfiguration (lokal, nie committen)
+AGENT_NAME=$name
+AGE_PUB=$pub
+EOF
+  chmod 600 "$CONF"
+
+  # Repos klonen
+  info "Klonen: $GH_ORG/$PRIVATE_REPO …"
+  git clone "git@github.com:$GH_ORG/$PRIVATE_REPO.git" "$MEMORIES_DIR" 2>/dev/null \
+    || { info "Privates Repo existiert evtl. noch nicht — lege Verzeichnis an"; mkdir -p "$MEMORIES_DIR"; }
+  info "Klonen: $GH_ORG/$PUBLIC_REPO …"
+  git clone "git@github.com:$GH_ORG/$PUBLIC_REPO.git" "$FRAMEWORK_DIR" 2>/dev/null \
+    || info "Public-Repo existiert evtl. noch nicht."
+
+  # Agent-Ordner anlegen
+  mkdir -p "$MEMORIES_DIR/agents/$name/skills" "$MEMORIES_DIR/agents/$name/insights" \
+           "$MEMORIES_DIR/vault/keys"
+
+  # Public-Key im privaten Repo ablegen (für Vault-Verschlüsselung durch andere)
+  echo "$pub" > "$MEMORIES_DIR/vault/keys/$name.age.pub"
+  info "✅ Agent '$name' initialisiert (age-Key: $MESH_HOME/keys/$name.age)"
+  info "   Public-Key registriert: vault/keys/$name.age.pub"
+  info "   Nächster Schritt: mesh sync (pusht die Registrierung)"
+}
+
+# ─────────────────────────── sync ───────────────────────────
+cmd_sync() {
+  load_conf
+  cd "$MEMORIES_DIR"
+  info "Pull von $GH_ORG/$PRIVATE_REPO …"
+  git pull --rebase origin main 2>/dev/null || git pull --rebase origin master 2>/dev/null \
+    || info "Pull übersprungen (Repo evtl. noch leer/ohne Branch)"
+
+  local agent_dir="agents/$AGENT_NAME"
+  mkdir -p "$agent_dir/skills" "$agent_dir/insights" vault/keys
+
+  # Public-Key (immer aktuell)
+  echo "$AGE_PUB" > "vault/keys/$AGENT_NAME.age.pub"
+
+  # Hermes-Wissen exportieren (falls Hermes vorhanden)
+  if command -v hermes >/dev/null 2>&1; then
+    info "Hermes-Wissen exportieren …"
+    mkdir -p "$agent_dir"
+    # Memories (MEMORY.md/USER.md liegen im Hermes-Home)
+    for f in MEMORY.md USER.md; do
+      src="$HOME/.hermes/memories/$f"
+      [ -f "$src" ] && cp "$src" "$agent_dir/$f" && info "  ✓ $f"
+    done
+    # Skills (nur agent-erstellte — Provenienz steht in .usage.json, nicht im Frontmatter!)
+    if [ -d "$HOME/.hermes/skills" ]; then
+      mkdir -p "$agent_dir/skills"
+      # agent-erstellte Skills aus .usage.json ermitteln (created_by: agent)
+      if [ -f "$HOME/.hermes/skills/.usage.json" ]; then
+        python3 - "$HOME/.hermes/skills/.usage.json" "$agent_dir/skills" "$HOME/.hermes/skills" << 'PYEOF'
+import json, os, sys, shutil
+usage_path, dest, src_root = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    usage = json.load(open(usage_path))
+except Exception:
+    usage = {}
+agent_skills = {name for name, meta in usage.items() if meta.get("created_by") == "agent"}
+for name in sorted(agent_skills):
+    # Skill-Verzeichnis finden (Kategorie-Unterordner)
+    for dirpath, dirnames, filenames in os.walk(src_root):
+        if "SKILL.md" in filenames and os.path.basename(dirpath) == name:
+            rel = os.path.relpath(dirpath, src_root)
+            target = os.path.join(dest, rel)
+            shutil.copytree(dirpath, target, dirs_exist_ok=True)
+            print(f"  ✓ Skill: {rel}")
+            break
+PYEOF
+      fi
+    fi
+  else
+    info "Hermes nicht gefunden — nur Git-Sync."
+  fi
+
+  # Commit + Push
+  git add -A 2>/dev/null
+  if ! git diff --cached --quiet 2>/dev/null; then
+    git commit -m "mesh-sync: $AGENT_NAME — $(date -u +%Y-%m-%dT%H:%M:%SZ)" 2>/dev/null \
+      || info "Nichts zu committen"
+    git push origin HEAD 2>/dev/null || info "Push fehlgeschlagen (Branch/Remote prüfen)"
+  else
+    info "Keine Änderungen — nichts zu committen"
+  fi
+
+  info "✅ Sync abgeschlossen."
+  cmd_status
+}
+
+# ─────────────────────────── vault (sops + age) ───────────────────────────
+vault_file() { echo "$MEMORIES_DIR/vault/secrets.yaml"; }
+
+vault_recipients() {
+  # Alle registrierten Public-Keys (bech32, sops akzeptiert sie direkt ohne age:-Prefix)
+  local keys=()
+  for k in "$MEMORIES_DIR"/vault/keys/*.pub; do
+    [ -f "$k" ] && keys+=("$(cat "$k")")
+  done
+  [ ${#keys[@]} -gt 0 ] || die "Keine Agent-Keys in vault/keys/ registriert"
+  printf '%s,' "${keys[@]}" | sed 's/,$//'
+}
+
+cmd_vault_set() {
+  load_conf
+  [ $# -ge 2 ] || die "Usage: mesh vault set <key> <value>"
+  local key="$1"; shift
+  local value="$*"
+  local vf; vf=$(vault_file)
+  mkdir -p "$(dirname "$vf")"
+
+  # Bestehende Datei laden oder neu anlegen
+  local tmp
+  tmp=$(mktemp)
+  if [ -f "$vf" ]; then
+    SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops -d "$vf" 2>/dev/null > "$tmp" \
+      || echo "{}" > "$tmp"
+  else
+    echo "{}" > "$tmp"
+  fi
+
+  # Wert setzen (python für sicheres JSON-Handling)
+  python3 - "$tmp" "$key" "$value" << 'EOF'
+import json, sys
+path, key, value = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    with open(path) as f: data = json.load(f)
+except Exception:
+    data = {}
+data[key] = value
+with open(path, "w") as f: json.dump(data, f, indent=2)
+EOF
+
+  # Mit allen Agent-Keys verschlüsseln
+  SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops --encrypt \
+    --age "$(vault_recipients)" \
+    --input-type json --output-type yaml \
+    "$tmp" > "$vf" 2>/dev/null || die "Verschlüsselung fehlgeschlagen"
+  rm -f "$tmp"
+
+  cd "$MEMORIES_DIR" && git add vault/secrets.yaml vault/keys/ 2>/dev/null
+  git commit -m "vault: $key (via $AGENT_NAME)" 2>/dev/null || true
+  git push origin HEAD 2>/dev/null || true
+  info "✅ Secret '$key' verschlüsselt abgelegt (empfänger: alle Agent-Keys)"
+}
+
+cmd_vault_get() {
+  load_conf
+  [ $# -ge 1 ] || die "Usage: mesh vault get <key>"
+  local vf; vf=$(vault_file)
+  [ -f "$vf" ] || die "Vault existiert noch nicht"
+  local tmp; tmp=$(mktemp)
+  SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops -d --output-type json "$vf" > "$tmp" 2>/dev/null \
+    || die "Entschlüsselung fehlgeschlagen (eigener Key nicht im Empfänger-Set?)"
+  python3 - "$tmp" "$1" << 'EOF'
+import json, sys
+with open(sys.argv[1]) as f: data = json.load(f)
+print(data.get(sys.argv[2], ""))
+EOF
+  rm -f "$tmp"
+}
+
+cmd_vault_list() {
+  load_conf
+  local vf; vf=$(vault_file)
+  [ -f "$vf" ] || { info "Vault ist leer."; return; }
+  local tmp; tmp=$(mktemp)
+  SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops -d --output-type json "$vf" > "$tmp" 2>/dev/null || die "Entschlüsselung fehlgeschlagen"
+  python3 - "$tmp" << 'EOF'
+import json, sys
+with open(sys.argv[1]) as f: data = json.load(f)
+for k in data: print(f"  {k}")
+EOF
+  rm -f "$tmp"
+}
+
+cmd_vault_add_key() {
+  load_conf
+  [ $# -ge 1 ] || die "Usage: mesh vault add-key <agent-name>"
+  local agent="$1" pub
+  pub=$(cat "$MESH_HOME/keys/$agent.age" 2>/dev/null | age-keygen -y 2>/dev/null) \
+    || die "Key für '$agent' nicht gefunden: $MESH_HOME/keys/$agent.age"
+  # Hinweis: andere Agents müssen ihren Key selbst einspielen — Public-Keys
+  # liegen im Repo unter vault/keys/. Zum Neuvorstellen: pub aus Repo lesen
+  info "Key-Handling: Public-Keys werden über das Repo geteilt (vault/keys/)."
+  info "Wenn '$agent' dort registriert ist, wird er bei vault set automatisch Empfänger."
+}
+
+# ─────────────────────────── insight ───────────────────────────
+cmd_insight() {
+  load_conf
+  [ $# -ge 2 ] || die "Usage: mesh insight add <text>"
+  local text="$*"
+  local stamp; stamp=$(date -u +%Y%m%d-%H%M%S)
+  local f="$MEMORIES_DIR/agents/$AGENT_NAME/insights/$stamp.md"
+  mkdir -p "$(dirname "$f")"
+  cat > "$f" << EOF
+# Insight $stamp
+**Agent:** $AGENT_NAME
+**Datum:** $(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+$text
+EOF
+  cd "$MEMORIES_DIR" && git add "$f" && git commit -m "insight: $AGENT_NAME $stamp" >/dev/null 2>&1
+  git push origin HEAD 2>/dev/null || true
+  info "✅ Insight geteilt: agents/$AGENT_NAME/insights/$stamp.md"
+}
+
+# ─────────────────────────── status ───────────────────────────
+cmd_status() {
+  load_conf
+  info "Agent: $AGENT_NAME"
+  info "Key:   $AGE_PUB"
+  if [ -d "$MEMORIES_DIR" ]; then
+    info "Repo:  $MEMORIES_DIR ($(git -C "$MEMORIES_DIR" rev-parse --short HEAD 2>/dev/null || echo leer))"
+    info "Agents im Mesh:"
+    for d in "$MEMORIES_DIR"/agents/*/; do
+      [ -d "$d" ] && echo "  • $(basename "$d")"
+    done
+    if [ -f "$MEMORIES_DIR/vault/secrets.yaml" ]; then
+      info "Vault: vorhanden ($(sops --input-type yaml --output-type json -d "$MEMORIES_DIR/vault/secrets.yaml" 2>/dev/null | python3 -c "import json,sys; print(len(json.load(sys.stdin)), 'Secrets')" 2>/dev/null || echo '?'))"
+    fi
+  fi
+}
+
+# ─────────────────────────── main ───────────────────────────
+main() {
+case "${1:-}" in
+  init)    shift; cmd_init "$@" ;;
+  sync)    shift; cmd_sync ;;
+  vault)   shift
+           local sub="${1:-}"
+           shift 2>/dev/null || true
+           case "$sub" in
+             set) cmd_vault_set "$@" ;;
+             get) cmd_vault_get "$@" ;;
+             list) cmd_vault_list ;;
+             add-key) cmd_vault_add_key "$@" ;;
+             *) die "vault: {set|get|list|add-key}" ;;
+           esac ;;
+  insight) shift; cmd_insight "$@" ;;
+  status)  shift; cmd_status ;;
+  *) echo "Usage: mesh {init|sync|vault|insight|status}" >&2; exit 1 ;;
+esac
+}
+main "$@"
