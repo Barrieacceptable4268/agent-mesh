@@ -40,12 +40,12 @@ dpkg -i /tmp/sops.deb
 ## Quickstart (one machine = one agent)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/moinsen-dev/agent-mesh/main/mesh -o /usr/local/bin/mesh
-chmod +x /usr/local/bin/mesh
+curl -fsSL https://raw.githubusercontent.com/moinsen-dev/agent-mesh/main/agent-mesh -o /usr/local/bin/agent-mesh
+chmod +x /usr/local/bin/agent-mesh
 
-mesh init <agent-name>        # e.g. "ax41" or "macbook"
-mesh sync                     # export knowledge + push (webhook-triggered after that)
-mesh status                   # who is in the mesh?
+agent-mesh init <agent-name>        # e.g. "ax41" or "macbook"
+agent-mesh sync                     # export knowledge + push (webhook-triggered after that)
+agent-mesh status                   # who is in the mesh?
 ```
 
 ## Vault (shared secrets)
@@ -55,9 +55,9 @@ Each agent has its own **age key** (`~/.hermes-mesh/keys/<name>.age`, chmod
 agents — everyone can read, nobody without a key.
 
 ```bash
-mesh vault set DB_PASSWORD "secret"   # store encrypted (all agents)
-mesh vault get DB_PASSWORD            # decrypt with own key
-mesh vault list                       # list key names
+agent-mesh vault set DB_PASSWORD "secret"   # store encrypted (all agents)
+agent-mesh vault get DB_PASSWORD            # decrypt with own key
+agent-mesh vault list                       # list key names
 ```
 
 ⚠ **Security:** The vault repo is private. Still: secrets belong only in the
@@ -67,15 +67,15 @@ vault, never in memory/insights.
 
 Messages flow as JSON files through the **private repo** (git queue pattern):
 `messages/<recipient>/<id>.json`. The sender commits+pulls, the recipient
-pulls on `mesh sync` and reads with `mesh inbox`. No open ports needed.
+pulls on `agent-mesh sync` and reads with `agent-mesh inbox`. No open ports needed.
 
 ```bash
-mesh role hub|worker|specialist      # set own role (agent card)
-mesh send <agent> <text>             # send a message
-mesh reply <msg-id> <text>           # reply (auto-finds the original)
-mesh inbox                           # read own mailbox
-mesh route <agent> <text>            # hub only: route a message
-mesh agents                          # show all agent cards (roles)
+agent-mesh role hub|worker|specialist      # set own role (agent card)
+agent-mesh send <agent> <text>             # send a message
+agent-mesh reply <msg-id> <text>           # reply (auto-finds the original)
+agent-mesh inbox                           # read own mailbox
+agent-mesh route <agent> <text>            # hub only: route a message
+agent-mesh agents                          # show all agent cards (roles)
 ```
 
 **Roles:** `hub` = central point of contact (routes messages, knows
@@ -84,10 +84,10 @@ Roles live in `agents/<name>/card.json` (in the private repo, visible to all).
 
 ### Real-time triggering (optional)
 
-A webhook listener (`mesh-webhook.py`, systemd service) makes sync run
+A webhook listener (`agent-mesh-webhook.py`, systemd service) makes sync run
 **immediately** on every push — no waiting for the cron interval:
 
-1. Run `mesh-webhook.py` on `127.0.0.1:8765` (systemd unit included in the
+1. Run `agent-mesh-webhook.py` on `127.0.0.1:8765` (systemd unit included in the
    repo, secret in `mesh.conf`).
 2. Expose it via a tunnel (e.g. Cloudflare) — HMAC signature verification
    (X-Hub-Signature-256) protects the endpoint.
@@ -97,17 +97,17 @@ A webhook listener (`mesh-webhook.py`, systemd service) makes sync run
 ## Insights (sharing learnings)
 
 ```bash
-mesh insight add "GH-8: preparation: is ignored, profiles_ch: is required"
+agent-mesh insight add "GH-8: preparation: is ignored, profiles_ch: is required"
 ```
 
 → lands as Markdown in `agents/<name>/insights/` and is visible to all mesh
-agents (on next `mesh sync`).
+agents (on next `agent-mesh sync`).
 
 ## Automation (cron fallback)
 
 ```bash
 # daily 06:00: pull → export → push (webhook makes this optional)
-echo "0 6 * * * root /usr/local/bin/mesh sync >> /var/log/mesh-sync.log 2>&1" \
+echo "0 6 * * * root /usr/local/bin/agent-agent-mesh sync >> /var/log/mesh-sync.log 2>&1" \
   > /etc/cron.d/mesh-sync
 ```
 
@@ -122,5 +122,5 @@ scoop, Task Scheduler).
 - **Public**: framework code. No personal data.
 - **Private**: memories/skills/insights/vault. Personal — never make it public.
 - Hermes profile export redacts secrets automatically
-  (`_EXPORT_REDACT_NAMES`); additionally `mesh sync` filters agent-created
+  (`_EXPORT_REDACT_NAMES`); additionally `agent-mesh sync` filters agent-created
   skills only.

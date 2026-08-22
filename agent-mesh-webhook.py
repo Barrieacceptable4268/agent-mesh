@@ -19,7 +19,7 @@ import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 SECRET = os.environ.get("AGENT_MESH_WEBHOOK_SECRET", "")
-AGENT_MESH_BIN = os.environ.get("AGENT_MESH_BIN", "/usr/local/bin/mesh")
+AGENT_MESH_BIN = os.environ.get("AGENT_MESH_BIN", "/usr/local/bin/agent-mesh")
 EXPECTED_REPO = "moinsen-dev/agent-mesh-memories"
 
 
