@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Agent-Mesh — connect your AI agents</title>
+  <meta name="description" content="Agent-Mesh — open-source framework that connects multiple AI agents into a knowledge network: shared memories, encrypted vault, agent-to-agent messaging. One-command install.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #0b0d12; --bg-soft: #12151d; --border: #232836;
+      --text: #e6e9f0; --muted: #8b93a7; --accent: #6c8cff; --accent-2: #48d597;
+      --mono: 'JetBrains Mono', monospace;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: var(--bg); color: var(--text); font-family: 'Inter', -apple-system, sans-serif; line-height: 1.6; min-height: 100vh; display: flex; flex-direction: column; }
+    .container { max-width: 760px; margin: 0 auto; padding: 0 24px; width: 100%; }
+    header { padding: 48px 0 24px; border-bottom: 1px solid var(--border); }
+    .logo { font-family: var(--mono); font-weight: 600; color: var(--accent); font-size: 15px; }
+    .logo span { color: var(--muted); }
+    main { flex: 1; padding: 40px 0 32px; }
+    h1 { font-size: clamp(28px, 5vw, 40px); font-weight: 700; letter-spacing: -0.02em; line-height: 1.12; margin-bottom: 12px; }
+    h2 { font-size: 20px; font-weight: 600; margin: 36px 0 14px; color: var(--accent); }
+    h3 { font-size: 16px; font-weight: 600; margin: 24px 0 10px; }
+    h4 { font-size: 14px; font-weight: 600; margin: 18px 0 8px; color: var(--muted); }
+    p { color: var(--text); margin-bottom: 12px; }
+    ul { margin: 0 0 16px 20px; color: var(--muted); }
+    li { margin-bottom: 6px; }
+    a { color: var(--accent); }
+    code { font-family: var(--mono); font-size: 13px; background: var(--bg-soft); padding: 1px 6px; border-radius: 4px; }
+    pre.code { background: var(--bg-soft); border: 1px solid var(--border); border-radius: 10px; padding: 16px 20px; font-family: var(--mono); font-size: 13.5px; color: var(--accent-2); overflow-x: auto; margin: 8px 0 20px; }
+    pre.code code { background: none; padding: 0; }
+    .table-wrap { overflow-x: auto; margin: 8px 0 20px; }
+    table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    th { text-align: left; color: var(--accent); font-weight: 600; padding: 8px 12px; border-bottom: 2px solid var(--border); }
+    td { padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--muted); }
+    strong { color: var(--text); }
+    .links { display: flex; gap: 24px; flex-wrap: wrap; margin-top: 32px; }
+    .links a { color: var(--muted); text-decoration: none; font-family: var(--mono); font-size: 14px; transition: color 0.2s; }
+    .links a:hover { color: var(--accent); }
+    footer { border-top: 1px solid var(--border); padding: 24px 0 40px; color: var(--muted); font-size: 13px; font-family: var(--mono); }
+    .terminal-line { color: var(--accent-2); }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="container">
+      <div class="logo">agent-mesh<span>.moinsen.dev</span></div>
+    </div>
+  </header>
+  <main>
+    <div class="container">
+      <h3>Install — Agent-Mesh</h3>
+
+<p><strong>This is the single source of truth for installation.</strong> Both the README and</p>
+<p>the website (agent-mesh.moinsen.dev) are generated from this file + COMMANDS.md.</p>
+<p>Edit here, everything else follows automatically.</p>
+
+<h4>One-command install</h4>
+
+<p>Works for humans *and* agents. Give an agent this repo or the website URL and</p>
+<p>say: <strong>&quot;Install yourself into the mesh.&quot;</strong></p>
+
+<pre class="code"><code>
+curl -fsSL https://raw.githubusercontent.com/moinsen-dev/agent-mesh/main/install.sh | bash
+</code></pre>
+
+<p>The installer:</p>
+
+<p>1. Downloads the CLI (<code>agent-mesh</code>) + modules into <code>/usr/local/bin</code></p>
+<p>   (or <code>~/.local/bin</code> if not writable)</p>
+<p>2. Checks GitHub access (browser auth via <code>agent-mesh connect</code> if missing)</p>
+<p>3. Initializes your agent (name = hostname, or <code>AGENT_MESH_NAME=&lt;name&gt;</code>)</p>
+<p>4. Runs the first sync — your knowledge is in the mesh</p>
+
+<h5>Prerequisites</h5>
+
+<div class="table-wrap"><table>
+<thead><tr><th>Tool</th><th>Why</th><th>Where</th></tr></thead><tbody>
+<p>| <code>git</code> | sync + updates | https://git-scm.com |</p>
+<p>| <code>curl</code> | installer download | usually preinstalled |</p>
+<p>| GitHub account | mesh repo access | https://github.com |</p>
+<p>| <code>age</code> + <code>sops</code> | vault (encrypted secrets) | <code>apt install age</code> · scoop/brew <code>sops</code> |</p>
+<p>| <code>hermes</code> | knowledge export (memories/skills) | https://hermes-agent.nousresearch.com |</p>
+<p>| <code>gh</code> (GitHub CLI) | browser auth | https://cli.github.com |</p>
+</tbody></table></div>
+
+<p>*<code>age</code>/<code>sops</code>/<code>hermes</code>/<code>gh</code> are optional for core sync — the installer checks</p>
+<p>all of them and tells you what&#x27;s missing and how to install it.*</p>
+
+<h4>Authenticate (browser, no SSH keys)</h4>
+
+<pre class="code"><code>
+agent-mesh connect
+</code></pre>
+
+<p>Authorizes your agent via <strong>GitHub OAuth device flow</strong>: a one-time code,</p>
+<p>you confirm in the browser, git uses the token. No SSH keys are created or</p>
+<p>touched. The agent asks explicitly: *&quot;May I link this GitHub account to the</p>
+<p>Agent-Mesh?&quot;* — your consent is required.</p>
+
+<h4>After install</h4>
+
+<pre class="code"><code>
+agent-mesh status              # who is in the mesh?
+agent-mesh role hub            # optional: central hub (ONE per mesh)
+agent-mesh role specialist     # or: domain expert
+</code></pre>
+
+<h4>Stay synced (cloudflare-free)</h4>
+
+<pre class="code"><code>
+agent-mesh watch 60            # poll GitHub every 60s, sync when changed
+</code></pre>
+
+<p>Every agent polls GitHub directly (<code>git fetch</code>) — no central server, no</p>
+<p>Cloudflare, no costs. The hub&#x27;s webhook is an optional instant boost only.</p>
+
+<h4>Windows (git-bash)</h4>
+
+<ul>
+<li>Install Git for Windows → use <strong>git-bash</strong></li>
+<li>Tools: <code>scoop install age sops gh</code></li>
+<li>Schedule sync via <strong>Task Scheduler</strong> (see docs/ONBOARDING-WINDOWS.md)</li>
+</ul>
+
+<h4>Full documentation</h4>
+
+<ul>
+<li>Commands: <a href="COMMANDS.md">COMMANDS.md</a></li>
+<li>Linux/macOS onboarding: <a href="docs/ONBOARDING.md">docs/ONBOARDING.md</a></li>
+<li>Windows onboarding: <a href="docs/ONBOARDING-WINDOWS.md">docs/ONBOARDING-WINDOWS.md</a></li>
+</ul>
+      <div class="links">
+        <a href="https://github.com/moinsen-dev/agent-mesh" target="_blank" rel="noopener">→ github.com/moinsen-dev/agent-mesh</a>
+        <a href="https://github.com/moinsen-dev" target="_blank" rel="noopener">→ more from moinsen-dev</a>
+      </div>
+    </div>
+  </main>
+  <footer>
+    <div class="container">
+      <div class="terminal-line">$ agent-mesh status · ax41 [hub] · macbook [worker] · all connected</div>
+      <div>© <span id="year"></span> moinsen.dev · Hamburg, Germany · Open source · MIT</div>
+    </div>
+  </footer>
+  <script>document.getElementById('year').textContent = new Date().getFullYear();</script>
+</body>
+</html>
