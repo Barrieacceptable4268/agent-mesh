@@ -170,7 +170,7 @@ function renderHtml() {
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Agent-Mesh Dashboard</title>
+<title>agent-mesh-dashboard</title>
 <style>
   :root { --bg:#0b0d12; --card:#12151d; --border:#232836; --text:#e6e9f0; --muted:#8b93a7; --accent:#6c8cff; --green:#48d597; --red:#ff6b6b; }
   * { margin:0; padding:0; box-sizing:border-box; }
@@ -201,7 +201,7 @@ function renderHtml() {
 </head>
 <body>
 <div class="container" id="app">
-  <h1>🐝 Agent-Mesh Dashboard</h1>
+  <h1>🐝 agent-mesh-dashboard</h1>
   <div class="sub">Live-Übersicht des Mesh-Verbunds · <span id="ver">…</span></div>
   <div id="content" style="display:none">
     <div class="status-line">Relay: <span id="relay">…</span></div>
