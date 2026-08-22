@@ -6,7 +6,7 @@ neuen Version liegen — niemand muss diese Datei von sich aus lesen.
 
 Format: eine Überschrift `## vX.Y.Z` pro Version, darunter Klartext.
 
-## v1.11.0
+## v1.13.0
 
 **Sicherheits-Release. Das Relay-Protokoll hat sich geändert — bitte einmal lesen.**
 
@@ -64,7 +64,7 @@ sollte nicht als „noch gültig" herumliegen:
 ```bash
 cd ~/.agent-mesh/memories
 git rm -q vault/secrets/relay-token.yaml 2>/dev/null \
-  && git commit -q -m "vault: relay-token entfernt (v1.11.0 nutzt age-Challenge-Response)" \
+  && git commit -q -m "vault: relay-token entfernt (v1.13.0 nutzt age-Challenge-Response)" \
   && git push
 ```
 
@@ -98,9 +98,29 @@ Kannst du Secrets lesen, die dich nichts angehen, wurden sie durch das alte
 Verhalten breit verteilt — dann einmal neu setzen:
 `agent-mesh vault set <key> <wert> --for <die-richtigen-agents>`
 
-### 5. Nebenbei repariert
+### 5. Nur auf dem HUB: Dashboard neu starten
+
+Der GitHub-OAuth-Login aus v1.11.0 hatte zwei Fehler, die zusammen unangenehm
+waren: Die OAuth-`state`-Werte lagen in derselben Map wie echte Sessions, und
+`requireAuth` prüfte nur, ob ein Eintrag existiert und noch gültig ist. Ein
+`GET /login` liefert den `state` offen im Redirect — mit dem Cookie
+`mesh_session=oauth_<state>` kam man ohne Anmeldung an alle Daten. Gleichzeitig
+funktionierte der echte Login gar nicht (`awaitFetch` wurde nie abgewartet).
+
+Beides ist behoben. Nach dem Update:
+
+```bash
+sudo systemctl restart agent-mesh-dashboard
+```
+
+Wer sich in der Zwischenzeit angemeldet hat, muss sich neu anmelden — alte
+Sessions sind mit dem Neustart weg. Das ist beabsichtigt.
+
+### 6. Nebenbei repariert
 
 - `vault revoke` und `agent-mesh connect` liefen auf **macOS** nie durch
   (`${var,,}` ist bash-4-Syntax, macOS hat bash 3.2). Jetzt portabel.
 - Dashboard: Agent-Namen gehen nicht mehr durch die Shell und nicht mehr als
   HTML in die Seite.
+- Dashboard: Der Mitgliedschafts-Check lief in ein 10-**Millisekunden**-Timeout
+  und schlug deshalb immer fehl. Jetzt 10 Sekunden.

@@ -1,4 +1,4 @@
-## Peer-Kommunikation & Sicherheit (v1.11+)
+## Peer-Kommunikation & Sicherheit (v1.13+)
 
 Nachrichten zwischen Agents gehen **sofort** über einen WebSocket-Relay (kein
 Git-Warten). Der Relay läuft auf dem Hub und soll **nur über Tailscale**
@@ -14,14 +14,14 @@ Ein Relay-Token gibt es nicht mehr — siehe unten.
 - Agents **ohne** Tailscale: automatischer Git-Fallback (60s) — kein Verlust
 - Nachrichten bleiben sops-verschlüsselt (Relay sieht nur Blobs)
 
-### Auth: age-Challenge-Response (seit v1.11.0)
+### Auth: age-Challenge-Response (seit v1.13.0)
 
 Bis v1.10 wies sich jeder Agent mit `HMAC(gemeinsames_secret, agentname)` aus.
 Das war kein Identitätsnachweis: Weil alle Agents dasselbe Secret brauchten,
 konnte jeder das Token jedes anderen berechnen — und sich als beliebiger Agent
 anmelden, dessen Offline-Queue leeren und unter dessen Namen senden.
 
-Seit v1.11.0:
+Seit v1.13.0:
 
 1. Agent meldet nur seinen Namen an.
 2. Der Relay zieht den Public-Key aus `vault/keys/<agent>.age.pub`,

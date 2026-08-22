@@ -8,11 +8,11 @@
 #   agent-mesh doctor            # alle Checks
 #   agent-mesh doctor --vault    # nur Vault/Encryption-Checks
 #   agent-mesh doctor --net      # nur GitHub/Repo-Checks
-#   agent-mesh doctor --security # Sicherheitsstand nach v1.11.0 prüfen
+#   agent-mesh doctor --security # Sicherheitsstand nach v1.13.0 prüfen
 
 set -euo pipefail
 
-# ── Sicherheits-Check (v1.11.0, Audit 2026-08-22) ──
+# ── Sicherheits-Check (v1.13.0, Audit 2026-08-22) ──
 # Beantwortet auf JEDEM Agent die Frage "ist die Migration bei mir angekommen?"
 # — und macht dabei einen ECHTEN age-Roundtrip statt nur Dateien zu zählen.
 security_checks() {
@@ -91,13 +91,13 @@ security_checks() {
   echo "── Framework-Stand ──"
   local v; v=$(cat "$FRAMEWORK_DIR/VERSION" 2>/dev/null || echo "?")
   case "$v" in
-    1.1[1-9].*|1.[2-9][0-9].*|[2-9].*) pass "Framework v$v enthält die Sicherheits-Fixes" ;;
-    *) bad "Framework v$v ist älter als v1.11.0 — 'agent-mesh update' ausführen" ;;
+    1.1[3-9].*|1.[2-9][0-9].*|[2-9].*) pass "Framework v$v enthält die Sicherheits-Fixes" ;;
+    *) bad "Framework v$v ist älter als v1.13.0 — 'agent-mesh update' ausführen" ;;
   esac
 
   echo ""
   if [ "$fail" -eq 0 ]; then
-    echo "✅ $ok Prüfungen bestanden — Sicherheitsstand v1.11.0 erreicht."
+    echo "✅ $ok Prüfungen bestanden — Sicherheitsstand v1.13.0 erreicht."
   else
     echo "⚠️  $ok bestanden, $fail offen — siehe die Hinweise oben."
     echo "   Vollständige Anleitung: $FRAMEWORK_DIR/MIGRATIONS.md"

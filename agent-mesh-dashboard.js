@@ -42,7 +42,12 @@ if (!GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET) {
   process.exit(1);
 }
 
-const sessions = new Map(); // token → {expiry, user}
+const sessions = new Map();     // token → {expiry, user}   NUR echte Anmeldungen
+// SECURITY: OAuth-States gehoeren NICHT in dieselbe Map wie Sessions. Lagen sie
+// dort (als "oauth_<state>" mit expiry), genuegte ein `GET /login` — der state
+// steht offen im Redirect — und ein Cookie `mesh_session=oauth_<state>`, um
+// requireAuth zu bestehen. Getrennte Map, und requireAuth verlangt einen User.
+const oauthStates = new Map();  // state → expiry
 
 function verifyGitHubUser(login) {
   // 1. Explizite Allowlist (falls gesetzt — hat Vorrang)
@@ -53,13 +58,13 @@ function verifyGitHubUser(login) {
   try {
     const out = execFileSync("sudo", ["-u", GH_ADMIN, "gh", "api",
       `orgs/${GH_OWNER}/memberships/${login}`, "--jq", ".state"],
-      { timeout: 10, stdio: ["ignore", "pipe", "ignore"] });
+      { timeout: 10000, stdio: ["ignore", "pipe", "ignore"] });
     if (out.toString().trim() === "active") return true;
   } catch { /* kein Org-Member → weiter prüfen */ }
   try {
     const out = execFileSync("sudo", ["-u", GH_ADMIN, "gh", "api",
       `repos/${GH_OWNER}/${GH_MEMBERS_REPO}/collaborators/${login}`,
-      "--jq", ".login"], { timeout: 10, stdio: ["ignore", "pipe", "ignore"] });
+      "--jq", ".login"], { timeout: 10000, stdio: ["ignore", "pipe", "ignore"] });
     return out.toString().trim().length > 0;
   } catch {
     return false; // 404 = kein Zugriff
@@ -68,7 +73,10 @@ function verifyGitHubUser(login) {
 
 function requireAuth(req, res) {
   const cookie = (req.headers.cookie || "").match(/mesh_session=([^;]+)/);
-  if (cookie && sessions.get(cookie[1]) && sessions.get(cookie[1]).expiry > Date.now()) return true;
+  const sess = cookie ? sessions.get(cookie[1]) : null;
+  // `sess.user` ist die eigentliche Bedingung: ein Eintrag ohne angemeldeten
+  // User ist keine Anmeldung, egal wie frisch sein Ablaufdatum ist.
+  if (sess && sess.user && sess.expiry > Date.now()) return true;
   res.writeHead(401, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ error: "unauthorized" }));
   return false;
@@ -155,13 +163,21 @@ function getRelayStatus(cb) {
   } catch { cb(null); }
 }
 
-const server = http.createServer((req, res) => {
+// Abgelaufene Sessions und States regelmaessig entfernen — sonst wachsen die
+// Maps unbegrenzt (Audit-Befund D5).
+setInterval(() => {
+  const now = Date.now();
+  for (const [k, v] of sessions) if (v.expiry < now) sessions.delete(k);
+  for (const [k, exp] of oauthStates) if (exp < now) oauthStates.delete(k);
+}, 5 * 60 * 1000).unref();
+
+const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
   // ── Auth: GitHub OAuth (Web Flow) ──
   if (url.pathname === "/login") {
     const state = crypto.randomBytes(16).toString("hex");
-    sessions.set("oauth_" + state, { expiry: Date.now() + 10 * 60 * 1000 });
+    oauthStates.set(state, Date.now() + 10 * 60 * 1000);
     const authUrl = "https://github.com/login/oauth/authorize" +
       `?client_id=${encodeURIComponent(GITHUB_CLIENT_ID)}` +
       `&redirect_uri=${encodeURIComponent(GITHUB_REDIRECT)}` +
@@ -175,14 +191,15 @@ const server = http.createServer((req, res) => {
   if (url.pathname === "/callback") {
     const code = url.searchParams.get("code");
     const state = url.searchParams.get("state");
-    if (!code || !state || !sessions.has("oauth_" + state)) {
+    const stateExp = oauthStates.get(state);
+    if (!code || !state || !stateExp || stateExp < Date.now()) {
       res.writeHead(400, { "Content-Type": "text/plain" });
       res.end("Ungültiger OAuth-State");
       return;
     }
-    sessions.delete("oauth_" + state);
+    oauthStates.delete(state);
     // Code gegen Token tauschen
-    const tokenResp = awaitFetch("https://github.com/login/oauth/access_token", {
+    const tokenResp = await awaitFetch("https://github.com/login/oauth/access_token", {
       method: "POST",
       headers: { "Content-Type": "application/json", "Accept": "application/json" },
       body: JSON.stringify({
@@ -198,10 +215,11 @@ const server = http.createServer((req, res) => {
       return;
     }
     // User-Info holen
-    const userResp = awaitFetch("https://api.github.com/user", {
+    const userResp = await awaitFetch("https://api.github.com/user", {
       headers: { "Authorization": "Bearer " + tokenResp.access_token, "User-Agent": "agent-mesh-dashboard" },
     });
-    const login = userResp && userResp.login ? userResp.login : "";
+    let login = userResp && userResp.login ? String(userResp.login) : "";
+    if (!/^[A-Za-z0-9-]{1,39}$/.test(login)) login = "";   // GitHub-Namensraum
     if (!login || !verifyGitHubUser(login)) {
       res.writeHead(403, { "Content-Type": "text/html" });
       res.end("<html><body style='font-family:sans-serif;background:#0b0d12;color:#e6e9f0;display:flex;justify-content:center;align-items:center;height:100vh'><div style='text-align:center'><h1>🚫 Zugriff verweigert</h1><p>GitHub-User <b>" + login + "</b> ist kein Mesh-Mitglied.</p><a href='/login' style='color:#6c8cff'>Erneut versuchen</a></div></body></html>");
