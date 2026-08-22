@@ -40,6 +40,11 @@ load_conf() {
   AGENT_NAME=$(grep "^AGENT_NAME=" "$CONF" | cut -d= -f2-)
   AGE_PUB=$(grep "^AGE_PUB=" "$CONF" | cut -d= -f2-)
   AGE_KEY_FILE="$MESH_HOME/keys/$AGENT_NAME.age"
+  # Optional: SSH-Key für Git-Operationen (wenn Agent als anderer User läuft)
+  SSH_LINE=$(grep "^GIT_SSH_COMMAND=" "$CONF" | cut -d= -f2-)
+  if [ -n "$SSH_LINE" ]; then
+    export GIT_SSH_COMMAND="$SSH_LINE"
+  fi
 }
 
 # ─────────────────────────── init ───────────────────────────
