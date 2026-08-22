@@ -45,7 +45,7 @@ command -v hermes >/dev/null 2>&1 || warn "hermes fehlt — Wissen-Export nur mi
 
 # ── 2. Framework-Dateien holen ──
 say "Lade Framework vom public Repo ($REPO@$BRANCH)…"
-for f in agent-mesh agent-mesh-a2a.sh agent-mesh-update.sh agent-mesh-webhook.py agent-mesh-watch.sh agent-mesh-connect.sh agent-mesh-watch.service agent-mesh-doctor.sh agent-mesh-responder.sh; do
+for f in agent-mesh agent-mesh-a2a.sh agent-mesh-update.sh agent-mesh-webhook.py agent-mesh-watch.sh agent-mesh-connect.sh agent-mesh-watch.service agent-mesh-doctor.sh agent-mesh-responder.sh agent-mesh-service.sh; do
   curl -fsSL "$RAW/$f" -o "$BIN_DIR/$f" 2>/dev/null \
     || die "Download fehlgeschlagen: $f (Netz? Repo-Name?)"
   chmod +x "$BIN_DIR/$f" 2>/dev/null || true
