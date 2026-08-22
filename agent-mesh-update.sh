@@ -335,6 +335,10 @@ cmd_update() {
     if systemctl is-active mesh-webhook >/dev/null 2>&1; then
       systemctl restart mesh-webhook 2>/dev/null && echo "  ✓ mesh-webhook neu gestartet"
     fi
+    # Nach Update IMMER sync (legacy watch-only Agents exportieren sonst nie
+    # Signaturschlüssel/Neues — beobachtet am nucbox-Fall, 2026-08-22)
+    echo "── Sync nach Update ──"
+    agent-mesh sync 2>&1 | tail -3 || echo "  ⚠️  sync meldete einen Fehler (lässt sich manuell nachholen)"
   fi
 
   # Optional Hermes-Hinweis
