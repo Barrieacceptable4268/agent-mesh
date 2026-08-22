@@ -18,6 +18,7 @@ set -euo pipefail
 
 GOV_FILE=".github/governance.md"
 GH_ORG="${AGENT_MESH_GH_ORG:-moinsen-dev}"
+GH_OWNER="${AGENT_MESH_GH_OWNER:-$GH_ORG}"
 PUBLIC_REPO="agent-mesh"
 
 # Stichwort → Agent-Zuordnung (anpassbar!)

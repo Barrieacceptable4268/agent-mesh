@@ -28,7 +28,7 @@ const GITHUB_CLIENT_ID = process.env.DASHBOARD_GITHUB_CLIENT_ID || "";
 const GITHUB_CLIENT_SECRET = process.env.DASHBOARD_GITHUB_CLIENT_SECRET || "";
 const GITHUB_REDIRECT = process.env.DASHBOARD_GITHUB_REDIRECT || "https://mesh-console.moinsen.dev/callback";
 const ALLOWED_USERS = (process.env.DASHBOARD_ALLOWED_USERS || "").split(",").map(s => s.trim()).filter(Boolean);
-const GH_ORG = process.env.AGENT_MESH_GH_ORG || "moinsen-dev";
+const GH_OWNER = process.env.DASHBOARD_GH_OWNER || "moinsen-dev"; // Owner des privaten Mesh-Repos (aus conf: AGENT_MESH_GH_OWNER)
 const GH_MEMBERS_REPO = process.env.DASHBOARD_MEMBERS_REPO || "agent-mesh-memories"; // privates Repo = Mitgliedschaft
 const GH_ADMIN = process.env.DASHBOARD_GH_ADMIN || "udi"; // System-User mit gh-Auth (Collaborator-Check)
 const MEMORIES = process.env.AGENT_MESH_HOME || "/root/.agent-mesh";
@@ -52,13 +52,13 @@ function verifyGitHubUser(login) {
   //    b) Repo-Collaborator (agent-mesh-memories)
   try {
     const out = execFileSync("sudo", ["-u", GH_ADMIN, "gh", "api",
-      `orgs/${GH_ORG}/memberships/${login}`, "--jq", ".state"],
+      `orgs/${GH_OWNER}/memberships/${login}`, "--jq", ".state"],
       { timeout: 10, stdio: ["ignore", "pipe", "ignore"] });
     if (out.toString().trim() === "active") return true;
   } catch { /* kein Org-Member → weiter prüfen */ }
   try {
     const out = execFileSync("sudo", ["-u", GH_ADMIN, "gh", "api",
-      `repos/${GH_ORG}/${GH_MEMBERS_REPO}/collaborators/${login}`,
+      `repos/${GH_OWNER}/${GH_MEMBERS_REPO}/collaborators/${login}`,
       "--jq", ".login"], { timeout: 10, stdio: ["ignore", "pipe", "ignore"] });
     return out.toString().trim().length > 0;
   } catch {

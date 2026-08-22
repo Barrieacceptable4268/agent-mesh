@@ -17,6 +17,7 @@
 set -euo pipefail
 
 GH_ORG="${AGENT_MESH_GH_ORG:-moinsen-dev}"
+GH_OWNER="${AGENT_MESH_GH_OWNER:-$GH_ORG}"
 PUBLIC_REPO="agent-mesh"
 
 # ── gh aufrufen: als eingeloggter User (udi), nicht root ──

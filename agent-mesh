@@ -26,8 +26,15 @@ set -euo pipefail
 AGENT_MESH_HOME="${AGENT_MESH_HOME:-$HOME/.agent-mesh}"
 CONF="$AGENT_MESH_HOME/agent-mesh.conf"
 GH_ORG="${AGENT_MESH_GH_ORG:-moinsen-dev}"
+# Eigene-Mesh-Vision (User, 2026-08-22): JEDER GitHub-User hat sein EIGENES
+# privates Mesh-Repo. GH_OWNER = wem die Repos gehören (User oder Org).
+GH_OWNER="${AGENT_MESH_GH_OWNER:-}"
+if [ -z "$GH_OWNER" ]; then
+  GH_OWNER=$(gh api user --jq .login 2>/dev/null | head -1 || true)
+fi
+[ -z "$GH_OWNER" ] && GH_OWNER="$GH_ORG"
 PUBLIC_REPO="agent-mesh"
-PRIVATE_REPO="agent-mesh-memories"
+PRIVATE_REPO="${AGENT_MESH_PRIVATE_REPO:-agent-mesh-memories}"
 MEMORIES_DIR="$AGENT_MESH_HOME/memories"          # Klon des privaten Repos
 FRAMEWORK_DIR="$AGENT_MESH_HOME/framework"        # Klon des public Repos
 
@@ -101,6 +108,9 @@ load_conf() {
   AGENT_NAME=$(grep "^AGENT_NAME=" "$CONF" | cut -d= -f2- || true)
   AGE_PUB=$(grep "^AGE_PUB=" "$CONF" | cut -d= -f2- || true)
   AGE_KEY_FILE="$AGENT_MESH_HOME/keys/$AGENT_NAME.age"
+  # Eigene-Mesh-Vision: Owner aus conf (falls dort gespeichert)
+  OWNER_LINE=$(grep "^AGENT_MESH_GH_OWNER=" "$CONF" | cut -d= -f2- || true)
+  [ -n "$OWNER_LINE" ] && GH_OWNER="$OWNER_LINE"
   # Optional: SSH-Key für Git-Operationen (wenn Agent als anderer User läuft)
   SSH_LINE=$(grep "^GIT_SSH_COMMAND=" "$CONF" | cut -d= -f2- || true)
   if [ -n "$SSH_LINE" ]; then
@@ -111,11 +121,11 @@ load_conf() {
 # ─────────────────────────── init ───────────────────────────
 # Git-Protokoll ableiten: HTTPS wenn gh eingeloggt (OAuth), sonst SSH (opt-in)
 git_clone_url() {
-  # $1 = Repo-Name (z.B. agent-mesh-memories)
+  # $1 = Repo-Name (z.B. agent-mesh-memories) — Owner = GH_OWNER (privates Mesh)
   if gh auth status >/dev/null 2>&1; then
-    echo "https://github.com/$GH_ORG/$1.git"
+    echo "https://github.com/$GH_OWNER/$1.git"
   else
-    echo "git@github.com:$GH_ORG/$1.git"
+    echo "git@github.com:$GH_OWNER/$1.git"
   fi
 }
 
@@ -144,14 +154,14 @@ EOF
   chmod 600 "$CONF"
 
   # Repos klonen — Protokoll aus gh ableiten (Issue #1: OAuth/HTTPS-konsistent!)
-  info "Klonen: $GH_ORG/$PRIVATE_REPO …"
+  info "Klonen: $GH_OWNER/$PRIVATE_REPO …"
   if ! git clone "$(git_clone_url "$PRIVATE_REPO")" "$MEMORIES_DIR" 2>/dev/null; then
     # Ziel existiert evtl. (vom alten Verhalten) — nur klonen wenn es kein Git-Repo ist
     if [ -d "$MEMORIES_DIR/.git" ]; then
       info "Klon existiert bereits (Git-Repo) — überspringe."
     else
       rm -rf "$MEMORIES_DIR" 2>/dev/null || true
-      die "❌ Konnte privates Repo NICHT klonen — prüfe Zugriff auf $GH_ORG/$PRIVATE_REPO"
+      die "❌ Konnte privates Repo NICHT klonen — prüfe Zugriff auf $GH_OWNER/$PRIVATE_REPO"
     fi
   fi
   info "Klonen: $GH_ORG/$PUBLIC_REPO …"
@@ -177,7 +187,7 @@ EOF
 cmd_sync() {
   load_conf
   cd "$MEMORIES_DIR"
-  info "Pull von $GH_ORG/$PRIVATE_REPO …"
+  info "Pull von $GH_OWNER/$PRIVATE_REPO …"
   git pull --rebase origin main 2>/dev/null || git pull --rebase origin master 2>/dev/null \
     || info "Pull übersprungen (Repo evtl. noch leer/ohne Branch)"
 
