@@ -1,34 +1,34 @@
 # Agent-Mesh
 
-Verbinde mehrere **Hermes-Agents** zu einem Wissens-Verbund: Sie tauschen
-Memories, Skills und Insights aus und teilen Secrets über ein verschlüsseltes
-Vault — „gegenseitig schlau machen" für deine Rechner-Flotte.
+Connect multiple **Hermes agents** into a knowledge network: they exchange
+memories, skills, and insights, and share secrets through an encrypted vault —
+"make each other smarter" for your fleet of machines.
 
 ```
 ┌─────────────────────────────────────────────┐
-│  agent-mesh-memories (PRIVATE Repo)         │
+│  agent-mesh-memories (PRIVATE repo)         │
 │  ┌──────────┬──────────┬──────────────────┐ │
 │  │ agents/  │ agents/  │ vault/          │ │
-│  │ ax41/    │ macbook/ │  secrets.yaml   │ │
+│  │  ax41/   │  macbook/│  secrets.yaml   │ │
 │  │  MEMORY  │  ...     │  (sops+age,     │ │
-│  │  skills/ │          │   verschlüsselt)│ │
+│  │  skills/ │          │   encrypted)    │ │
 │  └──────────┴──────────┴──────────────────┘ │
 └──────────────┬──────────────────────────────┘
-               │ git pull / push (Cron)
+               │ git pull / push (webhook-triggered)
      ┌─────────┴─────────┐
      │ Hermes Agent AX41 │    │ Hermes Agent Mac │
      └───────────────────┘    └──────────────────┘
 ```
 
-- **Public-Repo** (`agent-mesh`): dieses Framework — jeder kann es nutzen.
-- **Private-Repo** (`agent-mesh-memories`): die Daten (Memories/Skills/Vault).
-  Memories sind persönlich — niemals ins public Repo.
+- **Public repo** (`agent-mesh`): this framework — anyone can use it.
+- **Private repo** (`agent-mesh-memories`): the data (memories/skills/vault).
+  Memories are personal — never put them in the public repo.
 
-## Voraussetzungen (pro Rechner)
+## Prerequisites (per machine)
 
-- Git + SSH-Key auf GitHub (git@github.com)
-- `age` und `sops` (Vault)
-- `hermes` (für den Wissen-Export; ohne Hermes geht nur Git-Sync)
+- Git + SSH key on GitHub (git@github.com)
+- `age` and `sops` (vault)
+- `hermes` (for knowledge export; without Hermes only git sync works)
 
 ```bash
 # Debian/Ubuntu:
@@ -37,57 +37,88 @@ curl -fsSL -o /tmp/sops.deb https://github.com/getsops/sops/releases/latest/down
 dpkg -i /tmp/sops.deb
 ```
 
-## Schnellstart (ein Rechner = ein Agent)
+## Quickstart (one machine = one agent)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/moinsen-dev/agent-mesh/main/mesh -o /usr/local/bin/mesh
 chmod +x /usr/local/bin/mesh
 
-mesh init <agent-name>        # z.B. "ax41" oder "macbook"
-mesh sync                     # Wissen exportieren + pushen (Cron: täglich)
-mesh status                   # Wer ist im Mesh?
+mesh init <agent-name>        # e.g. "ax41" or "macbook"
+mesh sync                     # export knowledge + push (webhook-triggered after that)
+mesh status                   # who is in the mesh?
 ```
 
-## Vault (geteilte Secrets)
+## Vault (shared secrets)
 
-Jeder Agent hat einen eigenen **age-Key** (`~/.hermes-mesh/keys/<name>.age`,
-600er, nie committen). Secrets werden mit den Public-Keys **aller** Agents
-verschlüsselt → jeder kann lesen, niemand ohne Key.
+Each agent has its own **age key** (`~/.hermes-mesh/keys/<name>.age`, chmod
+600, never committed). Secrets are encrypted with the public keys of **all**
+agents — everyone can read, nobody without a key.
 
 ```bash
-mesh vault set DB_PASSWORD "geheim"   # verschlüsselt ablegen (alle Agents)
-mesh vault get DB_PASSWORD            # mit eigenem Key entschlüsseln
-mesh vault list                       # Schlüsselnamen anzeigen
+mesh vault set DB_PASSWORD "secret"   # store encrypted (all agents)
+mesh vault get DB_PASSWORD            # decrypt with own key
+mesh vault list                       # list key names
 ```
 
-⚠ **Sicherheit:** Das Vault-Repo ist privat. Trotzdem gilt: Secrets gehören
-nur ins Vault, nie in Memory/Insights.
+⚠ **Security:** The vault repo is private. Still: secrets belong only in the
+vault, never in memory/insights.
 
-## Insights (Erkenntnisse teilen)
+## A2A — Agent-to-Agent communication
+
+Messages flow as JSON files through the **private repo** (git queue pattern):
+`messages/<recipient>/<id>.json`. The sender commits+pulls, the recipient
+pulls on `mesh sync` and reads with `mesh inbox`. No open ports needed.
 
 ```bash
-mesh insight add "GH-8: preparation: wird ignoriert, profiles_ch: ist Pflicht"
+mesh role hub|worker|specialist      # set own role (agent card)
+mesh send <agent> <text>             # send a message
+mesh reply <msg-id> <text>           # reply (auto-finds the original)
+mesh inbox                           # read own mailbox
+mesh route <agent> <text>            # hub only: route a message
+mesh agents                          # show all agent cards (roles)
 ```
 
-→ landet als Markdown unter `agents/<name>/insights/` und ist für alle Agents
-im Mesh sichtbar (beim nächsten `mesh sync`).
+**Roles:** `hub` = central point of contact (routes messages, knows
+everyone), `worker` = executes tasks (default), `specialist` = domain expert.
+Roles live in `agents/<name>/card.json` (in the private repo, visible to all).
 
-## Automatisierung (Cron)
+### Real-time triggering (optional)
+
+A webhook listener (`mesh-webhook.py`, systemd service) makes sync run
+**immediately** on every push — no waiting for the cron interval:
+
+1. Run `mesh-webhook.py` on `127.0.0.1:8765` (systemd unit included in the
+   repo, secret in `mesh.conf`).
+2. Expose it via a tunnel (e.g. Cloudflare) — HMAC signature verification
+   (X-Hub-Signature-256) protects the endpoint.
+3. Create a GitHub webhook on the **private** repo: `push` event →
+   `https://mesh.<your-domain>/hook` with the secret.
+
+## Insights (sharing learnings)
 
 ```bash
-# täglich 06:00: pull → export → push
+mesh insight add "GH-8: preparation: is ignored, profiles_ch: is required"
+```
+
+→ lands as Markdown in `agents/<name>/insights/` and is visible to all mesh
+agents (on next `mesh sync`).
+
+## Automation (cron fallback)
+
+```bash
+# daily 06:00: pull → export → push (webhook makes this optional)
 echo "0 6 * * * root /usr/local/bin/mesh sync >> /var/log/mesh-sync.log 2>&1" \
   > /etc/cron.d/mesh-sync
 ```
 
-## Onboarding für neue Agents
+## Onboarding new agents
 
-Siehe [docs/ONBOARDING.md](docs/ONBOARDING.md).
+See [docs/ONBOARDING.md](docs/ONBOARDING.md).
 
-## Datenschutz-Hinweis
+## Privacy notice
 
-- **Public**: Framework-Code. Keine persönlichen Daten.
-- **Private**: Memories/Skills/Insights/Vault. Persönlich, nie public machen.
-- Der Profile-Export von Hermes redigiert Secrets automatisch
-  (`_EXPORT_REDACT_NAMES`), zusätzlich filtert `mesh sync` nur agent-erstellte
-  Skills.
+- **Public**: framework code. No personal data.
+- **Private**: memories/skills/insights/vault. Personal — never make it public.
+- Hermes profile export redacts secrets automatically
+  (`_EXPORT_REDACT_NAMES`); additionally `mesh sync` filters agent-created
+  skills only.
