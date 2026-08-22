@@ -232,6 +232,148 @@ security_checks() {
   return 0
 }
 
+# ── agent-mesh report ──────────────────────────────────────────────────────
+# Ein kompakter, kopierbarer Zustandsbericht. Zweck: nachprüfbare Tatsachen
+# statt einer wohlwollenden Zusammenfassung. Beim ersten Flotten-Rollout kamen
+# von vier Agents vier Prosa-Berichte, von denen mehrere Dinge als erledigt
+# meldeten, die es nicht waren — nicht aus Nachlässigkeit, sondern weil die
+# Werkzeuge meldeten, was sie TATEN, nicht was dabei herauskam.
+#
+# Deshalb hier ausschliesslich Beobachtungen aus dem Dateisystem und aus git.
+# Läuft bewusst auch auf einer Maschine, auf der nichts eingerichtet ist —
+# genau dann ist der Bericht am wertvollsten.
+cmd_report() {
+  local home="${AGENT_MESH_HOME:-$HOME/.agent-mesh}"
+  local conf="$home/agent-mesh.conf"
+  local fw="$home/framework"
+  local name ver commit remote_ver behind trust tag_state signkey relay_tok
+
+  echo "═══ agent-mesh report ═══"
+  printf '%-14s %s\n' "zeit" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '%-14s %s (%s, bash %s)\n' "host" "$(hostname 2>/dev/null || echo '?')" \
+         "$(uname -sr 2>/dev/null || echo '?')" "${BASH_VERSION%%(*}"
+
+  if [ -f "$conf" ]; then
+    name=$(grep "^AGENT_NAME=" "$conf" 2>/dev/null | cut -d= -f2- | head -1)
+    printf '%-14s %s\n' "agent" "${name:-(kein AGENT_NAME in der conf)}"
+  else
+    printf '%-14s %s\n' "agent" "NICHT INITIALISIERT — keine $conf"
+  fi
+
+  # ── Framework-Klon ──
+  if [ -d "$fw/.git" ]; then
+    ver=$(cat "$fw/VERSION" 2>/dev/null || echo "?")
+    commit=$(git -C "$fw" log -1 --format='%h %s' 2>/dev/null | cut -c1-58)
+    printf '%-14s v%s  (%s)\n' "framework" "$ver" "$commit"
+    remote_ver=$(git -C "$fw" show origin/main:VERSION 2>/dev/null || echo "?")
+    behind=$(git -C "$fw" rev-list --count HEAD..origin/main 2>/dev/null || echo "?")
+    if [ "$ver" = "$remote_ver" ]; then
+      printf '%-14s v%s — aktuell\n' "remote" "$remote_ver"
+    else
+      printf '%-14s v%s — %s Commit(s) voraus  ⚠️  UPDATE NÖTIG\n' "remote" "$remote_ver" "$behind"
+    fi
+  else
+    printf '%-14s %s\n' "framework" "KEIN KLON unter $fw"
+  fi
+
+  # ── Installationsorte: was liegt wo, und was greift wirklich ──
+  local d base f diffs total onpath
+  for d in /usr/local/bin "$HOME/.local/bin" /opt/homebrew/bin; do
+    [ -f "$d/agent-mesh" ] || continue
+    diffs=0; total=0
+    if [ -d "$fw" ]; then
+      for f in "$fw"/agent-mesh "$fw"/agent-mesh-*.sh "$fw"/agent-mesh-*.py "$fw"/agent-mesh-*.js; do
+        [ -f "$f" ] || continue
+        base=$(basename "$f"); total=$((total+1))
+        [ -f "$d/$base" ] && cmp -s "$f" "$d/$base" || diffs=$((diffs+1))
+      done
+    fi
+    if [ "$total" -eq 0 ]; then
+      printf '%-14s %s — vorhanden, aber nicht vergleichbar (kein Framework-Klon)\n' "install" "$d"
+    elif [ "$diffs" -eq 0 ]; then
+      printf '%-14s %s — %s Dateien, deckungsgleich\n' "install" "$d" "$total"
+    else
+      printf '%-14s %s — %s von %s Dateien ABWEICHEND  ⚠️\n' "install" "$d" "$diffs" "$total"
+    fi
+  done
+  onpath=$(command -v agent-mesh 2>/dev/null || echo "")
+  if [ -z "$onpath" ]; then
+    printf '%-14s %s\n' "auf PATH" "NICHT GEFUNDEN"
+  else
+    printf '%-14s %s\n' "auf PATH" "$onpath"
+  fi
+
+  # ── Vertrauensbasis und Release-Signatur ──
+  local sf="${AGENT_MESH_SIGNERS_FILE:-$home/trusted_signers}"
+  if [ -s "$sf" ] && [ "$(grep -cvE '^[[:space:]]*(#|$)' "$sf" 2>/dev/null || echo 0)" -gt 0 ]; then
+    trust=$(awk '!/^[[:space:]]*(#|$)/{print $1}' "$sf" 2>/dev/null | tr '\n' ' ')
+    printf '%-14s %s\n' "trust" "$trust"
+  else
+    printf '%-14s %s\n' "trust" "FEHLT — agent-mesh trust"
+  fi
+
+  tag_state="—"
+  if [ -d "$fw/.git" ] && [ -n "${ver:-}" ] && [ "$ver" != "?" ]; then
+    (cd "$fw" && git fetch --quiet origin "refs/tags/v$ver:refs/tags/v$ver" --force 2>/dev/null) || true
+    if (cd "$fw" && git rev-parse "v$ver" >/dev/null 2>&1); then
+      if (cd "$fw" && git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$sf" \
+            verify-tag "v$ver" >/dev/null 2>&1); then
+        tag_state="v$ver signiert und vertrauenswürdig"
+      else
+        tag_state="v$ver vorhanden, aber NICHT verifizierbar  ⚠️"
+      fi
+    else
+      tag_state="kein Tag v$ver"
+    fi
+  fi
+  printf '%-14s %s\n' "release" "$tag_state"
+
+  # ── Schlüssel ──
+  if [ -n "${name:-}" ]; then
+    [ -f "$home/keys/$name.age" ] && signkey="age ✓" || signkey="age FEHLT"
+    if [ -f "$home/keys/$name.ssh" ]; then
+      signkey="$signkey · sign ✓"
+      if [ -f "$home/memories/vault/keys/$name.ssh.pub" ] \
+         && cmp -s "$home/keys/$name.ssh.pub" "$home/memories/vault/keys/$name.ssh.pub"; then
+        signkey="$signkey (veröffentlicht)"
+      else
+        signkey="$signkey (NICHT veröffentlicht — agent-mesh sync)  ⚠️"
+      fi
+    else
+      signkey="$signkey · sign FEHLT  ⚠️"
+    fi
+    printf '%-14s %s\n' "keys" "$signkey"
+  fi
+
+  if [ -f "$conf" ] && grep -q "^AGENT_MESH_RELAY_TOKEN=" "$conf" 2>/dev/null; then
+    printf '%-14s %s\n' "relay-token" "NOCH IN DER CONF — gehört entfernt  ⚠️"
+  fi
+
+  # ── Läuft der Watcher? ──
+  if ps ax 2>/dev/null | grep -q "[a]gent-mesh watch"; then
+    printf '%-14s %s\n' "watcher" "läuft"
+  else
+    printf '%-14s %s\n' "watcher" "nicht aktiv"
+  fi
+
+  # ── Sicherheits-Kurzfassung: nur die offenen Punkte ──
+  echo "───"
+  if [ -f "$conf" ]; then
+    local out ok_n bad_n
+    out=$(cmd_doctor --security 2>&1 || true)
+    ok_n=$(printf '%s\n' "$out" | grep -c "✅" || true)
+    bad_n=$(printf '%s\n' "$out" | grep -c "❌" || true)
+    printf '%-14s %s bestanden, %s offen\n' "security" "${ok_n:-0}" "${bad_n:-0}"
+    if [ "${bad_n:-0}" -gt 0 ]; then
+      printf '%s\n' "$out" | grep "❌" | sed 's/^ */  /'
+    fi
+  else
+    printf '%-14s %s\n' "security" "nicht prüfbar (nicht initialisiert)"
+  fi
+  echo "═══ ende ═══"
+  return 0
+}
+
 cmd_doctor() {
   local mode="all"
   [ "${1:-}" = "--vault" ] && mode="vault"

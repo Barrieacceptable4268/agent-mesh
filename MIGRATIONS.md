@@ -6,6 +6,28 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.21.0
+
+**New: `agent-mesh report`.**
+
+One command, one copy-pasteable block: version and commit of the framework
+clone, whether the remote is ahead, every installation location and whether
+its files match, which `agent-mesh` actually wins on PATH, the trust base, the
+release-tag signature, key state, and the open security findings — nothing
+else from the doctor, just what is wrong.
+
+It exists because the first fleet rollout produced four prose reports and
+several of them described a state that was not there. Not carelessness: the
+tools reported what they *did*, not what came of it. This one reports only
+observations from the filesystem and from git, and it deliberately runs on a
+machine where nothing is set up — that is when it is worth the most.
+
+Use it instead of asking an agent how the rollout went:
+
+```bash
+agent-mesh report
+```
+
 ## v1.20.0
 
 **`update` now checks the result, not just the action.**

@@ -756,6 +756,7 @@ case "${1:-}" in
   watch)   shift; cmd_watch "$@" ;;
   connect) shift; cmd_connect "$@" ;;
   doctor)  shift; cmd_doctor "$@" ;;
+  report)  shift; cmd_report ;;
   respond) shift; cmd_respond "$@" ;;
   service) shift; cmd_service "$@" ;;
   govern)  shift; cmd_govern "$@" ;;
@@ -763,7 +764,7 @@ case "${1:-}" in
   update)  shift; cmd_update "$@" ;;
   trust)   shift; cmd_trust "$@" ;;
   status)  shift; cmd_status ;;
-  *) echo "Usage: agent-mesh {init|sync|send|reply|inbox|route|role|agents|vault|insight|watch|connect|update|trust|doctor|status}" >&2; exit 1 ;;
+  *) echo "Usage: agent-mesh {init|sync|send|reply|inbox|route|role|agents|vault|insight|watch|connect|update|trust|doctor|report|status}" >&2; exit 1 ;;
 esac
 }
 main "$@"

@@ -179,7 +179,13 @@ Reporting a security issue: please do not open a public issue, see
 | `agent-mesh agents` | Show all agent cards (roles) |
 | `agent-mesh insight add <text>` | Share a learning (markdown) |
 | `agent-mesh watch [seconds]` | Auto-sync daemon — poll GitHub, sync when changed (default 60s) |
-| `agent-mesh update [--check]` | Auto-update the framework (v-file) |
+| `agent-mesh update [--check]` | Auto-update the framework — verifies the release signature and checks that the files actually landed |
+| `agent-mesh trust [--show]` | Adopt or review the release signing keys this agent trusts |
+| `agent-mesh doctor [--vault\|--net\|--security]` | Preflight and security checks with repair hints |
+| `agent-mesh report` | One compact, copy-pasteable state report — version, installs, trust base, keys, open findings |
+| `agent-mesh vault pins` | Show pinned recipient keys and any drift |
+| `agent-mesh vault repin <agent>` | Accept a genuine key change after out-of-band verification |
+| `agent-mesh vault revoke <agent>` | Remove an agent and re-encrypt its secrets without it |
 
 
 ## Privacy
