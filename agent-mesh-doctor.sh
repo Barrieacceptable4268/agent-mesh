@@ -88,6 +88,47 @@ security_checks() {
   [ "$drift" = "0" ] && pass "Keine Key-Abweichungen"
 
   echo ""
+  echo "── Nachrichten-Signaturen (Befund 10) ──"
+  local skf="$AGENT_MESH_HOME/keys/$AGENT_NAME.ssh"
+  if [ -f "$skf" ]; then
+    pass "Eigener Signaturschlüssel vorhanden"
+    local reg="$MEMORIES_DIR/vault/keys/$AGENT_NAME.ssh.pub"
+    if [ -f "$reg" ] && [ "$(cat "$reg")" = "$(cat "$skf.pub" 2>/dev/null)" ]; then
+      pass "Signatur-Public-Key ist aktuell in der Registry"
+    else
+      bad "Signatur-Public-Key fehlt oder weicht ab — andere können dich nicht prüfen"
+      note "  agent-mesh sync"
+    fi
+    # Echter Roundtrip: signieren und selbst verifizieren
+    local tf; tf=$(mktemp); echo "probe-$$" > "$tf"
+    if sig=$(sign_payload "$tf" 2>/dev/null) && [ -n "$sig" ]; then
+      local sf; sf=$(mktemp); printf '%s' "$sig" > "$sf"
+      if verify_payload "$tf" "$sf" "$AGENT_NAME" 2>/dev/null; then
+        pass "Signieren und Prüfen funktioniert (echter Roundtrip)"
+      else
+        bad "Eigene Signatur ist nicht verifizierbar"
+      fi
+      rm -f "$sf"
+    else
+      bad "Signieren fehlgeschlagen (ssh-keygen vorhanden?)"
+    fi
+    rm -f "$tf"
+  else
+    bad "Kein Signaturschlüssel — deine Nachrichten gelten als unbelegt"
+    note "  agent-mesh sync   (legt ihn an und veröffentlicht ihn)"
+  fi
+  local nsig
+  nsig=$(ls "$MEMORIES_DIR"/vault/keys/*.ssh.pub 2>/dev/null | wc -l | tr -d ' ')
+  local nage
+  nage=$(ls "$MEMORIES_DIR"/vault/keys/*.age.pub 2>/dev/null | wc -l | tr -d ' ')
+  if [ "${nsig:-0}" -lt "${nage:-0}" ]; then
+    bad "$nsig von $nage Agents haben einen Signaturschlüssel veröffentlicht"
+    note "Nachrichten der übrigen erscheinen als UNSIGNIERT, bis sie einmal syncen."
+  else
+    pass "Alle $nage bekannten Agents haben einen Signaturschlüssel"
+  fi
+
+  echo ""
   echo "── Update-Signaturen (Befund 8) ──"
   local sf="${AGENT_MESH_SIGNERS_FILE:-$AGENT_MESH_HOME/trusted_signers}"
   if [ -s "$sf" ] && [ "$(grep -cvE '^[[:space:]]*(#|$)' "$sf")" -gt 0 ]; then

@@ -37,9 +37,21 @@ key from the registry and login becomes impossible.
 - **Metadata.** Who talks to whom, when, and how much is in the relay log and
   in plain text in the Git mailbox files. The content is encrypted, the
   envelope is not.
-- **Sender authenticity at the content level.** age encrypts to a *public*
-  key — anyone who has it can *create* a message. The relay authenticates the
-  connection, not the text inside it.
+- **Traffic analysis.** Even with signed content, the pattern of who talks to
+  whom and when stays visible.
+
+### Sender authenticity (since v1.15.0)
+
+Encryption alone never proved authorship: age encrypts to a *public* key, so
+anyone holding it could craft a message that arrived under someone else's
+name. Each agent therefore also has an ed25519 signing key
+(`vault/keys/<agent>.ssh.pub`).
+
+The plaintext is signed **before** encryption and the signature travels inside
+the encrypted envelope — the relay never sees it. It covers id, sender,
+recipient, timestamp and text, so an intercepted envelope can neither be
+readdressed nor attributed to another sender. Receivers mark anything that
+fails as unproven, and the auto-responder refuses to act on it.
 
 ### Bind address
 

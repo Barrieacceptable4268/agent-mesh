@@ -47,12 +47,20 @@ cmd_respond() {
     [ "$from" = "$AGENT_NAME" ] && { touch "$f.responded"; continue; }
     [ -z "$from" ] && { touch "$f.responded"; continue; }
 
-    # Nachrichtentext entschlüsseln (für den Antwort-Kontext)
-    if [ -f "$f.enc" ]; then
-      text=$(SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops -d --input-type yaml --output-type json "$f.enc" 2>/dev/null \
-        | "$PYTHON_BIN" -c "import json,sys;print(json.load(sys.stdin).get('text',''))" 2>/dev/null || true)
-    else
-      text=$("$PYTHON_BIN" -c "import json;print(json.load(open('$f')).get('text',''))" 2>/dev/null || true)
+    # Nachricht entschlüsseln UND Absender prüfen (Befund 10).
+    # Ein Auto-Responder, der auf unbelegte Absender antwortet, ist ein
+    # Werkzeug für jeden, der eine Nachricht fälschen kann — deshalb wird
+    # hier ausschliesslich auf "ok" reagiert.
+    local res status
+    res=$(read_message "$f" "$from")
+    status="${res%%|*}"; text="${res#*|}"
+    if [ "$status" != "ok" ]; then
+      case "$status" in
+        forged) warn "🚨 $id von '$from': Signatur ungültig — keine Antwort, nicht gelöscht." ;;
+        unsigned) warn "⚠️  $id von '$from': unsigniert — keine automatische Antwort." ;;
+      esac
+      touch "$f.responded"
+      continue
     fi
 
     # Nur auf FRAGEN/Aufträge antworten — nicht auf Bestätigungen (UPDATE-OK, READY…)

@@ -181,25 +181,50 @@ next_msg_id() {
 msg_file() { echo "$MESSAGES_DIR/$1/$2.json"; }
 msg_enc() { echo "${1}.enc"; }
 
-# Verschlüsselten Text erzeugen (JSON-Objekt mit "text" — sops-verschlüsselt)
+# Signierten, verschlüsselten Umschlag erzeugen (Befund 10).
+# Aufbau des Klartexts VOR der Verschlüsselung:
+#   {"payload": "<kanonisches JSON>", "sig": "<ssh-Signatur>"}
+# payload enthält id/from/to/ts/text — die Signatur deckt also nicht nur den
+# Text ab, sondern auch, WER an WEN und WANN. Ein abgefangener Umschlag lässt
+# sich damit weder umadressieren noch einem anderen Absender zuschreiben.
 encrypt_text() {
-  # $1 = Empfänger-Key (bech32), $2 = Klartext
-  local recipient="$1" text="$2" tmp
-  tmp=$(mktemp)
-  "$PYTHON_BIN" - "$tmp" "$text" << 'EOF'
+  # $1 = Empfänger-Key (bech32), $2 = Klartext, $3 = id, $4 = Empfängername
+  local recipient="$1" text="$2" mid="$3" to="$4"
+  local pdir; pdir=$(mktemp -d)
+  local pfile="$pdir/payload.json"
+
+  "$PYTHON_BIN" - "$pfile" "$mid" "$AGENT_NAME" "$to" "$text" << 'PYEOF'
+import json, sys, time
+path, mid, frm, to, text = sys.argv[1:6]
+# sort_keys + kompakte Trenner: der Empfänger muss exakt dieselben Bytes
+# verifizieren, die hier signiert wurden.
+with open(path, "w", encoding="utf-8") as f:
+    json.dump({"id": mid, "from": frm, "to": to,
+               "ts": int(time.time()), "text": text},
+              f, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+PYEOF
+
+  local sig
+  sig=$(sign_payload "$pfile") || { rm -rf "$pdir"; die "Signieren fehlgeschlagen — Nachricht NICHT gesendet."; }
+
+  local envelope="$pdir/envelope.json"
+  "$PYTHON_BIN" - "$envelope" "$pfile" "$sig" << 'PYEOF'
 import json, sys
-with open(sys.argv[1], "w") as f: json.dump({"text": sys.argv[2]}, f)
-EOF
+out, pfile, sig = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(pfile, encoding="utf-8") as f: payload = f.read()
+with open(out, "w", encoding="utf-8") as f:
+    json.dump({"payload": payload, "sig": sig}, f)
+PYEOF
+
   if ! SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops --encrypt \
-    --age "$recipient" --input-type json --output-type yaml "$tmp" 2>/dev/null; then
-    rm -f "$tmp"
-    # Issue #2: klare, plattformspezifische Diagnose statt kryptischem Fehler!
+    --age "$recipient" --input-type json --output-type yaml "$envelope" 2>/dev/null; then
+    rm -rf "$pdir"
     die "Verschlüsselung fehlgeschlagen. sops nicht gefunden oder Age-Key nicht nutzbar.
   → Diagnose: 'agent-mesh doctor --vault'
   → sops installieren: macOS 'brew install sops' · Windows 'scoop install sops' · Linux 'apt install sops'
   → Sicherheit: KEIN Fallback auf Klartext — Nachricht wird nicht gesendet."
   fi
-  rm -f "$tmp"
+  rm -rf "$pdir"
 }
 
 cmd_send() {
@@ -214,7 +239,7 @@ cmd_send() {
   local to_pub; to_pub=$(agent_pub "$to")
 
   # Verschlüsselten Text erzeugen (nur Empfänger kann lesen)
-  local enc; enc=$(encrypt_text "$to_pub" "$text")
+  local enc; enc=$(encrypt_text "$to_pub" "$text" "$id" "$to")
   local f; f=$(msg_file "$to" "$id")
   cat > "$f" << EOF
 {
@@ -258,7 +283,7 @@ cmd_reply() {
 
   # Empfänger-Key laden + verschlüsseln
   local to_pub; to_pub=$(agent_pub "$from")
-  local enc; enc=$(encrypt_text "$to_pub" "$text")
+  local enc; enc=$(encrypt_text "$to_pub" "$text" "$id" "$from")
   local f; f=$(msg_file "$from" "$id")
   cat > "$f" << EOF
 {
@@ -296,48 +321,96 @@ cmd_broadcast() {
   info "📢 Broadcast an $sent Agent(s) gesendet."
 }
 
-cmd_inbox() {  load_conf
+# Entschlüsseln UND Absender prüfen. Gibt auf stdout aus:
+#   <status>|<text>       status: ok | unsigned | forged | stale
+#
+# Wiedereinspielungen brauchen keine eigene Liste: die Signatur deckt die
+# Nachrichten-ID mit ab, und die wird gegen den Umschlag geprüft. Ein alter
+# Umschlag unter neuer ID fällt damit als "forged" durch, derselbe Umschlag
+# unter derselben ID ist dieselbe Nachricht — und älter als 7 Tage wird sie
+# ohnehin nicht mehr als frisch anerkannt.
+# Der Text wird auch bei schlechtem Status geliefert — der Aufrufer
+# entscheidet, ob er ihn zeigt. Handeln darf man nur auf "ok".
+read_message() {
+  # $1 = Pfad zur .json (Metadaten), $2 = erwarteter Absender
+  local meta="$1" from="$2"
+  local enc="$meta.enc"
+  [ -f "$enc" ] || { echo "unsigned|(kein verschlüsselter Inhalt)"; return; }
+
+  local dir; dir=$(mktemp -d)
+  if ! SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops -d --input-type yaml --output-type json "$enc" > "$dir/env.json" 2>/dev/null; then
+    rm -rf "$dir"; echo "unsigned|🔒 nicht entschlüsselbar (dein Key ist kein Empfänger)"; return
+  fi
+
+  # Alt-Format ohne Signatur (vor v1.15) — lesbar, aber nicht als echt zählen
+  if ! grep -q '"sig"' "$dir/env.json" 2>/dev/null; then
+    local t; t=$("$PYTHON_BIN" -c "import json,sys;print(json.load(open(sys.argv[1])).get('text',''))" "$dir/env.json" 2>/dev/null)
+    rm -rf "$dir"; echo "unsigned|$t"; return
+  fi
+
+  "$PYTHON_BIN" - "$dir/env.json" "$dir/payload.json" "$dir/sig" << 'PYEOF'
+import json, sys
+env = json.load(open(sys.argv[1], encoding="utf-8"))
+open(sys.argv[2], "w", encoding="utf-8").write(env.get("payload", ""))
+open(sys.argv[3], "w", encoding="utf-8").write(env.get("sig", ""))
+PYEOF
+
+  if ! verify_payload "$dir/payload.json" "$dir/sig" "$from"; then
+    rm -rf "$dir"; echo "forged|⚠️  Signatur ungültig oder Absender stimmt nicht"; return
+  fi
+
+  # Inhalt der Payload gegen den Umschlag halten: eine gültig signierte
+  # Nachricht an jemand anderen darf hier nicht als eigene durchgehen.
+  local out
+  out=$("$PYTHON_BIN" - "$dir/payload.json" "$meta" "$AGENT_NAME" << 'PYEOF'
+import json, sys, time
+pl = json.load(open(sys.argv[1], encoding="utf-8"))
+meta = json.load(open(sys.argv[2], encoding="utf-8"))
+me = sys.argv[3]
+if pl.get("to") != me or pl.get("from") != meta.get("from") or pl.get("id") != meta.get("id"):
+    print("forged|⚠️  Signatur gilt einer anderen Nachricht (id/from/to weichen ab)")
+elif time.time() - int(pl.get("ts", 0)) > 7 * 24 * 3600:
+    print("stale|" + pl.get("text", ""))
+else:
+    print("ok|" + pl.get("text", ""))
+PYEOF
+)
+  rm -rf "$dir"
+  echo "$out"
+}
+
+cmd_inbox() {
+  load_conf
   local dir="$MESSAGES_DIR/$AGENT_NAME"
   [ -d "$dir" ] || { info "Keine Nachrichten."; return; }
   local any=0
   for f in "$dir"/*.json; do
     [ -f "$f" ] || continue
-    [ "$(basename "$f")" = "*.enc" ] && continue
-    # Nur .json (nicht .enc) verarbeiten
-    case "$f" in *.enc) continue;; esac
+    case "$f" in *.enc|*.processed|*.responded) continue;; esac
     any=1
-    "$PYTHON_BIN" - "$f" "$f.enc" "$AGE_KEY_FILE" << 'PYEOF'
-import json, os, subprocess, sys
-meta_path, enc_path, keyfile = sys.argv[1], sys.argv[2], sys.argv[3]
-try:
-    m = json.load(open(meta_path))
-except Exception:
-    sys.exit(0)
-print(f"── {m['id']} ──")
-print(f"  von: {m['from']}  ·  {m['ts']}")
-print(f"  an:  {m['to']}")
-if m.get("reply_to"): print(f"  antwort auf: {m['reply_to']}")
-# Verschlüsselten Text entschlüsseln (eigener Key)
-if m.get("encrypted") and os.path.exists(enc_path):
-    env = dict(os.environ, SOPS_AGE_KEY_FILE=keyfile)
-    try:
-        out = subprocess.run(
-            ["sops", "-d", "--input-type", "yaml", "--output-type", "json", enc_path],
-            capture_output=True, text=True, env=env, timeout=15,
-        )
-        if out.returncode == 0:
-            text = json.loads(out.stdout).get("text", "")
-            print(f"  text: {text}")
-        else:
-            print(f"  text: 🔒 verschlüsselt (dein Key ist kein Empfänger)")
-    except Exception:
-        print(f"  text: 🔒 verschlüsselt (Entschlüsselung fehlgeschlagen)")
-else:
-    print(f"  text: {m.get('text', '(kein Text)')}")
-print(f"  (Antwort: agent-mesh reply {m['id']} <text>)")
-PYEOF
+    local id from ts reply_to
+    id=$("$PYTHON_BIN" -c "import json,sys;print(json.load(open(sys.argv[1])).get('id',''))" "$f" 2>/dev/null || echo "?")
+    from=$("$PYTHON_BIN" -c "import json,sys;print(json.load(open(sys.argv[1])).get('from',''))" "$f" 2>/dev/null || echo "?")
+    ts=$("$PYTHON_BIN" -c "import json,sys;print(json.load(open(sys.argv[1])).get('ts',''))" "$f" 2>/dev/null || echo "")
+    reply_to=$("$PYTHON_BIN" -c "import json,sys;print(json.load(open(sys.argv[1])).get('reply_to') or '')" "$f" 2>/dev/null || echo "")
+
+    local res status text
+    res=$(read_message "$f" "$from")
+    status="${res%%|*}"; text="${res#*|}"
+
+    echo "── $id ──"
+    case "$status" in
+      ok)       echo "  von: $from  ✅ signiert  ·  $ts" ;;
+      unsigned) echo "  von: $from  ⚠️  UNSIGNIERT (Absender nicht belegt)  ·  $ts" ;;
+      forged)   echo "  von: $from  🚨 SIGNATUR UNGÜLTIG — Absender nicht echt  ·  $ts" ;;
+      stale)    echo "  von: $from  ⏳ signiert, aber älter als 7 Tage  ·  $ts" ;;
+    esac
+    [ -n "$reply_to" ] && echo "  antwort auf: $reply_to"
+    echo "  text: $text"
+    echo "  (Antwort: agent-mesh reply $id <text>)"
   done
   [ "$any" = "0" ] && info "Keine Nachrichten."
+  return 0
 }
 
 # ─────────────────────────── Rollen ───────────────────────────

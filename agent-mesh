@@ -180,6 +180,9 @@ EOF
 
   # Public-Key im privaten Repo ablegen (für Vault-Verschlüsselung durch andere)
   echo "$pub" > "$MEMORIES_DIR/vault/keys/$name.age.pub"
+  # Signaturschlüssel (Befund 10): Echtheit von Nachrichten, nicht nur Vertraulichkeit
+  AGENT_NAME="$name" ensure_sign_key
+  cp "$AGENT_MESH_HOME/keys/$name.ssh.pub" "$MEMORIES_DIR/vault/keys/$name.ssh.pub"
   info "✅ Agent '$name' initialisiert (age-Key: $AGENT_MESH_HOME/keys/$name.age)"
   info "   Public-Key registriert: vault/keys/$name.age.pub"
   info "   Nächster Schritt: agent-mesh sync (pusht die Registrierung)"
@@ -196,8 +199,10 @@ cmd_sync() {
   local agent_dir="agents/$AGENT_NAME"
   mkdir -p "$agent_dir/skills" "$agent_dir/insights" vault/keys
 
-  # Public-Key (immer aktuell)
+  # Public-Keys (immer aktuell) — Verschlüsselung UND Signatur
   echo "$AGE_PUB" > "vault/keys/$AGENT_NAME.age.pub"
+  ensure_sign_key
+  cp "$(sign_key_file).pub" "vault/keys/$AGENT_NAME.ssh.pub"
 
   # Hermes-Wissen exportieren (falls Hermes vorhanden)
   if command -v hermes >/dev/null 2>&1; then
@@ -532,7 +537,9 @@ cmd_vault_revoke() {
   # 2. Public-Key des zu entfernenden Agents merken, DANN löschen
   local revoked_pub; revoked_pub=$(cat "$pub_file")
   rm -f "$pub_file"
+  rm -f "$MEMORIES_DIR/vault/keys/$agent.ssh.pub"
   pin_forget "$agent"
+  pin_forget "SSH_$agent"
 
   # 3. Jedes Secret mit SEINER EIGENEN Empfängerliste neu verschlüsseln,
   #    abzüglich des widerrufenen Keys (Audit-Befund #5).
@@ -573,6 +580,75 @@ cmd_vault_revoke() {
   git commit -m "vault: REVOKE $agent — Keys entfernt, alle Secrets re-encrypted" >/dev/null 2>&1
   push_retry
   info "✅ Agent '$agent' widerrufen — kann keine Secrets mehr lesen."
+}
+
+# ── Nachrichten-Signatur (Security v1.15, Audit-Befund 10) ──
+# age verschluesselt an einen OEFFENTLICHEN Key. Wer den kennt — und im
+# privaten Repo kennt ihn jeder Leser —, kann eine Nachricht ERZEUGEN, die
+# als "from": "ax41" in einer Mailbox landet. Der Auto-Responder reagiert
+# automatisch darauf, Governance verteilt Auftraege ueber denselben Kanal.
+# Verschluesselung ist Vertraulichkeit, nicht Echtheit.
+#
+# Deshalb bekommt jeder Agent zusaetzlich einen ed25519-SSH-Signaturschluessel.
+# Signiert wird der KLARTEXT vor dem Verschluesseln (sign-then-encrypt), die
+# Signatur reist im verschluesselten Umschlag mit — der Relay sieht sie nie.
+SIGN_NS="agent-mesh-msg"
+
+sign_key_file() { echo "$AGENT_MESH_HOME/keys/$AGENT_NAME.ssh"; }
+
+# Signaturschluessel anlegen, falls er fehlt (auch fuer Bestands-Agents)
+ensure_sign_key() {
+  local f; f=$(sign_key_file)
+  [ -f "$f" ] && return 0
+  command -v ssh-keygen >/dev/null 2>&1 || die "ssh-keygen fehlt — ohne es koennen Nachrichten nicht signiert werden"
+  mkdir -p "$(dirname "$f")"
+  ssh-keygen -q -t ed25519 -f "$f" -N "" -C "$AGENT_NAME" </dev/null >/dev/null 2>&1 \
+    || die "Signaturschluessel konnte nicht erzeugt werden ($f)"
+  chmod 600 "$f" 2>/dev/null || true
+  echo "🔑 Signaturschluessel fuer '$AGENT_NAME' erzeugt: $f" >&2
+}
+
+# Signatur-Public-Key eines Agents aus der Registry — gegen den Pin geprueft.
+# ACHTUNG: stdout ist der Key, Meldungen nach stderr.
+agent_sign_pub() {
+  local a="$1"
+  local f="$MEMORIES_DIR/vault/keys/$a.ssh.pub"
+  [ -f "$f" ] || return 1
+  local pub; pub=$(cat "$f")
+  [ -n "$pub" ] || return 1
+  local pinned; pinned=$(pin_get "SSH_$a")
+  if [ -z "$pinned" ]; then
+    pin_set "SSH_$a" "$pub"
+    echo "🔑 Signatur-Key von '$a' erstmalig gepinnt (TOFU)" >&2
+  elif [ "$pinned" != "$pub" ]; then
+    echo "🚨 SIGNATUR-KEY-WECHSEL bei '$a' — Nachricht wird NICHT als echt anerkannt." >&2
+    echo "   Uebernehmen nur nach Ruecksprache: agent-mesh vault repin $a" >&2
+    return 1
+  fi
+  echo "$pub"
+}
+
+# Klartext-Payload signieren -> gibt die Signatur (armored) auf stdout
+sign_payload() {
+  # $1 = Datei mit dem zu signierenden Inhalt
+  ensure_sign_key
+  local f; f=$(sign_key_file)
+  rm -f "$1.sig"
+  ssh-keygen -Y sign -f "$f" -n "$SIGN_NS" "$1" >/dev/null 2>&1 || return 1
+  cat "$1.sig"; rm -f "$1.sig"
+}
+
+# Signatur pruefen. 0 = echt und vom angegebenen Absender.
+verify_payload() {
+  # $1 = Datei mit dem Inhalt, $2 = Datei mit der Signatur, $3 = Absender
+  local content="$1" sigfile="$2" from="$3"
+  local pub; pub=$(agent_sign_pub "$from") || return 1
+  local allow; allow=$(mktemp)
+  printf '%s %s\n' "$from" "$pub" > "$allow"
+  ssh-keygen -Y verify -f "$allow" -I "$from" -n "$SIGN_NS" -s "$sigfile" < "$content" >/dev/null 2>&1
+  local rc=$?
+  rm -f "$allow"
+  return $rc
 }
 
 # ─────────────────────────── insight ───────────────────────────

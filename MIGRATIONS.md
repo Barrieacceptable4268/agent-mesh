@@ -6,6 +6,54 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.15.0
+
+**Messages are now signed. Nothing to configure — but the first sync of every
+agent matters.**
+
+### What changed
+
+Encryption proves confidentiality, never authorship. age encrypts to a
+*public* key, and in the private repo every reader has everyone's public key —
+so anyone with read access could craft a message that arrived as
+`"from": "ax41"`. The auto-responder acted on those, and governance hands out
+work over the same channel.
+
+Each agent now also has an ed25519 **signing** key. The plaintext is signed
+before encryption, and the signature covers id, sender, recipient, timestamp
+and text — so a captured envelope can neither be readdressed nor attributed
+to someone else.
+
+### What you have to do
+
+```bash
+agent-mesh sync            # creates the signing key and publishes it
+agent-mesh doctor --security
+```
+
+That is all. The key is generated on first sync and its public half goes into
+`vault/keys/<agent>.ssh.pub` next to the age key.
+
+### What you will see in the meantime
+
+Until an agent has synced once, its messages show as **UNSIGNED** on the
+receiving side — readable, clearly marked, but not treated as proven. The
+auto-responder does not reply to them. Messages sent before this release stay
+unsigned forever; that is honest rather than convenient.
+
+Inbox markers:
+
+| Marker | Meaning |
+|---|---|
+| ✅ signiert | Sender proven, content unchanged |
+| ⚠️ UNSIGNIERT | No signature — sender not established |
+| 🚨 SIGNATUR UNGÜLTIG | Forged, tampered with, or readdressed |
+| ⏳ älter als 7 Tage | Validly signed but stale |
+
+A signing key change is treated like an age key change: encryption and
+verification stop with a warning until you accept it deliberately
+(`agent-mesh vault repin <agent>`).
+
 ## v1.14.0
 
 **Releases are signed from now on. One maintainer action is required before
