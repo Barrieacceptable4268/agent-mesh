@@ -37,6 +37,9 @@ A2A_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-a2a.sh"
 # Update-Modul einbinden (mesh update / --check / --hermes)
 UPDATE_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-update.sh"
 [ -f "$UPDATE_MODULE" ] && source "$UPDATE_MODULE"
+# Watch-Modul (Polling-Daemon) — nur für `watch`-Dispatch
+WATCH_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-watch.sh"
+[ -f "$WATCH_MODULE" ] && source "$WATCH_MODULE"
 
 die() { echo "❌ $*" >&2; exit 1; }
 info() { echo "ℹ️  $*"; }
@@ -316,6 +319,7 @@ case "${1:-}" in
              *) die "vault: {set|get|list|add-key}" ;;
            esac ;;
   insight) shift; cmd_insight "$@" ;;
+  watch)   shift; cmd_watch "$@" ;;
   update)  shift; cmd_update "$@" ;;
   status)  shift; cmd_status ;;
   *) echo "Usage: mesh {init|sync|send|reply|inbox|route|role|agents|vault|insight|update|status}" >&2; exit 1 ;;

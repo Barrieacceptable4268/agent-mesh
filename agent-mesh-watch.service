@@ -1,0 +1,14 @@
+[Unit]
+Description=Agent-Mesh Watch (Polling-Sync — hält den Agent automatisch aktuell)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=HOME=/root
+ExecStart=/usr/local/bin/agent-mesh watch 60
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

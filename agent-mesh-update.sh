@@ -39,7 +39,7 @@ install_framework() {
     dst="$HOME/.local/bin"
     mkdir -p "$dst"
   fi
-  for f in mesh mesh-a2a.sh mesh-webhook.py; do
+  for f in agent-mesh agent-mesh-a2a.sh agent-mesh-update.sh agent-mesh-webhook.py agent-mesh-watch.sh; do
     if [ -f "$src/$f" ]; then
       cp "$src/$f" "$dst/$f" && chmod +x "$dst/$f" 2>/dev/null
       echo "  ✓ $f → $dst/$f"
