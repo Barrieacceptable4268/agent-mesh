@@ -422,6 +422,147 @@ cmd_inbox() {
   return 0
 }
 
+# ─────────────────── Wartungs-Broadcast (v1.26.0) ───────────────────
+# Ein Agent ruft "agent-mesh maintenance", alle anderen bringen sich selbst
+# auf Stand. Der entscheidende Entwurfsgrundsatz:
+#
+#   Die Nachricht ist ein SIGNAL, kein BEFEHL.
+#
+# Uebertragen wird ausschliesslich das Wort "self-update". WAS dabei passiert,
+# steht fest im Code des Empfaengers und ist vom Absender nicht beeinflussbar.
+# Ein Kanal, ueber den beliebige Kommandos laufen, waere genau die
+# Fernsteuerung, die dieses Projekt sonst mit Signaturen ausschliesst.
+#
+# Drei Schranken, jede fuer sich ausreichend:
+#   1. Die Nachricht muss signaturgeprueft sein (Befund 10) — read_message "ok"
+#   2. Der Absender muss in MAINTENANCE_FROM stehen (Default: nur der Hub)
+#   3. Sie darf nicht aelter als 30 Minuten sein und nur einmal wirken
+#
+# Und selbst wenn alle drei fielen: der ausgeloeste Ablauf installiert nur
+# Releases mit gueltiger Signatur (Befund 8). Der groesste erreichbare Schaden
+# ist, dass alle Agents aktuell werden.
+MAINT_SENTINEL="#!agent-mesh:maintenance:self-update"
+
+maintenance_allowed_from() {
+  local allowed
+  allowed=$(grep "^MAINTENANCE_FROM=" "$CONF" 2>/dev/null | cut -d= -f2- | head -1)
+  if [ -z "$allowed" ]; then
+    # Default: der Agent mit der Rolle hub, sonst niemand
+    for c in "$MEMORIES_DIR"/agents/*/card.json; do
+      [ -f "$c" ] || continue
+      if grep '"role"' "$c" 2>/dev/null | grep hub >/dev/null 2>&1; then
+        allowed="$allowed $(basename "$(dirname "$c")")"
+      fi
+    done
+  fi
+  echo "$allowed" | tr ',' ' '
+}
+
+# ── Senden ──
+cmd_maintenance() {
+  load_conf
+  local dry=0
+  [ "${1:-}" = "--dry-run" ] && dry=1
+  local sent=0 to
+  for k in "$MEMORIES_DIR"/vault/keys/*.age.pub; do
+    [ -f "$k" ] || continue
+    to=$(basename "$k" .age.pub)
+    [ "$to" = "$AGENT_NAME" ] && continue
+    if [ "$dry" = "1" ]; then
+      echo "  würde senden an: $to"
+    else
+      cmd_send "$to" "$MAINT_SENTINEL" >/dev/null 2>&1 && echo "  ✓ $to"
+    fi
+    sent=$((sent+1))
+  done
+  if [ "$dry" = "1" ]; then
+    info "Probelauf — $sent Empfänger. Ohne --dry-run wird gesendet."
+  else
+    info "🔧 Wartungssignal an $sent Agent(en). Sie aktualisieren sich beim nächsten watch-Zyklus (≤60s) und melden sich per report zurück."
+    info "   Fortschritt: agent-mesh fleet"
+  fi
+}
+
+# ── Empfangen und ausführen (vom watch-Daemon aufgerufen) ──
+cmd_maintenance_run() {
+  load_conf
+  local dir="$MESSAGES_DIR/$AGENT_NAME"
+  [ -d "$dir" ] || return 0
+  local allowed; allowed=$(maintenance_allowed_from)
+  local f id from res status text now ts_epoch
+
+  for f in "$dir"/*.json; do
+    [ -f "$f" ] || continue
+    case "$f" in *.enc|*.processed|*.responded|*.maint) continue;; esac
+    [ -f "$f.maint" ] && continue          # jede Anweisung wirkt genau einmal
+
+    id=$(basename "$f" .json)
+    from=$("$PYTHON_BIN" -c "import json,sys;print(json.load(open(sys.argv[1])).get('from',''))" "$f" 2>/dev/null || echo "")
+    [ -n "$from" ] || continue
+
+    # Schranke 1: Signatur muss halten
+    res=$(read_message "$f" "$from"); status="${res%%|*}"; text="${res#*|}"
+    case "$text" in "$MAINT_SENTINEL"*) ;; *) continue;; esac
+    touch "$f.maint"
+    if [ "$status" != "ok" ]; then
+      warn "🚫 Wartungssignal von '$from' NICHT signaturgeprüft ($status) — ignoriert."
+      continue
+    fi
+
+    # Schranke 2: Absender muss berechtigt sein
+    case " $allowed " in
+      *" $from "*) ;;
+      *) warn "🚫 Wartungssignal von '$from' — nicht berechtigt (erlaubt: ${allowed:-niemand})"; continue ;;
+    esac
+
+    # Schranke 3: nicht älter als 30 Minuten
+    ts_epoch=$("$PYTHON_BIN" - "$f" << 'PYTS'
+import calendar, json, sys, time
+try:
+    m = json.load(open(sys.argv[1], encoding="utf-8"))
+    print(int(calendar.timegm(time.strptime(m.get("ts",""), "%Y-%m-%dT%H:%M:%SZ"))))
+except Exception:
+    print(0)
+PYTS
+)
+    now=$(date -u +%s)
+    if [ "${ts_epoch:-0}" -lt "$((now - 1800))" ]; then
+      warn "⏳ Wartungssignal von '$from' ist älter als 30 Minuten — ignoriert."
+      continue
+    fi
+
+    info "🔧 Wartungssignal von '$from' — führe die feste Wartungsfolge aus."
+    maintenance_sequence "$from"
+    return 0        # eine Wartung pro Durchlauf genügt
+  done
+  return 0
+}
+
+# Die FESTE Folge. Nichts davon kommt aus der Nachricht.
+maintenance_sequence() {
+  local requester="$1" self
+  self=$(command -v agent-mesh 2>/dev/null || echo "agent-mesh")
+
+  "$self" update 2>&1 | tail -5
+
+  # trust nur beim ERSTEN Mal automatisch. Ein Schlüsselwechsel ist ein
+  # Ereignis, das ein Mensch bestätigen muss — sonst wäre die Vertrauensbasis
+  # per Broadcast austauschbar, und die ganze Signaturkette wertlos.
+  local sf="${AGENT_MESH_SIGNERS_FILE:-$AGENT_MESH_HOME/trusted_signers}"
+  if [ ! -s "$sf" ]; then
+    "$self" trust 2>&1 | tail -3
+  fi
+
+  "$self" sync 2>&1 | tail -3
+
+  # Ergebnis zurückmelden — der Hub sieht es ohnehin über fleet, aber der
+  # Auslöser soll nicht warten müssen.
+  local summary
+  summary=$("$self" report 2>/dev/null | grep -E "^(framework|remote|security)" | tr '\n' ' ' || true)
+  "$self" send "$requester" "MAINTENANCE-OK: ${summary:-report nicht verfügbar}" >/dev/null 2>&1 || true
+  info "✅ Wartung abgeschlossen, Rückmeldung an '$requester' gesendet."
+}
+
 # ─────────────────────────── Rollen ───────────────────────────
 cmd_role() {
   load_conf

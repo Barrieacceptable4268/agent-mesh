@@ -6,6 +6,55 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.26.0
+
+**`agent-mesh maintenance` — one command, the whole fleet updates itself.**
+
+```bash
+agent-mesh maintenance --dry-run   # who would be told
+agent-mesh maintenance             # tell them
+agent-mesh fleet                   # watch it happen
+```
+
+Every agent picks the signal up on its next watch cycle (≤60s), runs update →
+trust → sync, and reports back. No more pasting the same three commands into
+six terminals.
+
+### The design rule this follows
+
+The message is a **signal, not a command**. The only thing transmitted is the
+word `self-update`; *what* that does is fixed in the receiving agent's own
+code and cannot be influenced by the sender. A channel that carried arbitrary
+commands would be precisely the remote control this project spends its
+signature machinery preventing.
+
+Three independent barriers, each sufficient on its own:
+
+1. the message must pass signature verification (finding 10)
+2. the sender must be listed in `MAINTENANCE_FROM` — default: whoever holds
+   the `hub` role
+3. it must be under 30 minutes old, and it acts exactly once
+
+All four refusal cases were tested: an unauthorised sender, a forged message
+encrypted to the recipient's public key, a genuine signal two hours old, and
+the same signal replayed.
+
+And if all three barriers failed, the triggered sequence still installs only
+releases with a valid signature (finding 8). The worst reachable outcome is
+that every agent becomes current.
+
+### One thing it deliberately does not do
+
+`trust` runs only when no trust base exists yet. A **change** of signing key
+stays a human decision — otherwise the trust base itself would be replaceable
+by broadcast, and the whole signature chain would be worth nothing.
+
+### Restricting it further
+
+```bash
+echo "MAINTENANCE_FROM=ax41" >> ~/.agent-mesh/agent-mesh.conf
+```
+
 ## v1.25.0
 
 **A broken fleet report now says why, and a broken one is never published.**
