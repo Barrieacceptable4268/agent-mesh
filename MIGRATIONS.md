@@ -98,7 +98,7 @@ Kannst du Secrets lesen, die dich nichts angehen, wurden sie durch das alte
 Verhalten breit verteilt — dann einmal neu setzen:
 `agent-mesh vault set <key> <wert> --for <die-richtigen-agents>`
 
-### 5. Nur auf dem HUB: Dashboard neu starten
+### 5. Nur auf dem HUB: Dashboard einspielen und neu starten
 
 Der GitHub-OAuth-Login aus v1.11.0 hatte zwei Fehler, die zusammen unangenehm
 waren: Die OAuth-`state`-Werte lagen in derselben Map wie echte Sessions, und
@@ -107,11 +107,37 @@ waren: Die OAuth-`state`-Werte lagen in derselben Map wie echte Sessions, und
 `mesh_session=oauth_<state>` kam man ohne Anmeldung an alle Daten. Gleichzeitig
 funktionierte der echte Login gar nicht (`awaitFetch` wurde nie abgewartet).
 
-Beides ist behoben. Nach dem Update:
+**Achtung, hier gibt es einen Henne-Ei-Effekt:** `install_framework` hat bis
+v1.12 nur `agent-mesh`, `*.sh` und `*.py` kopiert — **niemals `.js`**. Das
+Dashboard wurde vom Update also nie verteilt. Ab v1.13.0 ist `.js` mit dabei,
+aber beim Update *auf* v1.13.0 läuft noch die alte Kopierschleife. Dieses eine
+Mal muss die Datei von Hand rüber:
 
 ```bash
-sudo systemctl restart agent-mesh-dashboard
+# 1. Datei aus dem frisch gepullten Framework-Klon holen
+sudo cp ~/.agent-mesh/framework/agent-mesh-dashboard.js /usr/local/bin/
+sudo chmod +x /usr/local/bin/agent-mesh-dashboard.js
+
+# 2. Wie heisst der Dienst? (Es liegt keine .service-Datei im Repo —
+#    die Unit wurde auf dem Hub von Hand angelegt.)
+systemctl list-units --type=service | grep -i -E 'dashboard|mesh-console'
+
+# 3. Mit dem gefundenen Namen neu starten und nachsehen
+sudo systemctl restart <gefundener-name>
+sudo systemctl status  <gefundener-name> --no-pager | head -5
 ```
+
+Prüfen, dass die Umgehung wirklich zu ist — von aussen, mit echter URL:
+
+```bash
+STATE=$(curl -s -i https://mesh-console.moinsen.dev/login \
+        | grep -i '^location:' | grep -oE 'state=[a-f0-9]+' | cut -d= -f2)
+curl -s -o /dev/null -w '%{http_code}\n' \
+     -H "Cookie: mesh_session=oauth_$STATE" \
+     https://mesh-console.moinsen.dev/api/status
+```
+Erwartet: **401**. Kommt **200**, läuft noch der alte Code — dann ist Schritt 1
+nicht angekommen.
 
 Wer sich in der Zwischenzeit angemeldet hat, muss sich neu anmelden — alte
 Sessions sind mit dem Neustart weg. Das ist beabsichtigt.
@@ -124,3 +150,5 @@ Sessions sind mit dem Neustart weg. Das ist beabsichtigt.
   HTML in die Seite.
 - Dashboard: Der Mitgliedschafts-Check lief in ein 10-**Millisekunden**-Timeout
   und schlug deshalb immer fehl. Jetzt 10 Sekunden.
+- `agent-mesh update` verteilt ab jetzt auch `.js`-Dateien. Vorher meldete es
+  Erfolg, ohne das Dashboard je angefasst zu haben.

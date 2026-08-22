@@ -44,8 +44,12 @@ install_framework() {
   # Alt-Installationen). Verhindert den Chicken-Egg-Bug: alte Update-Module
   # mit alten Namen kopieren nichts, neue Dateien werden automatisch mitgenommen.
   local copied=0
+  # .js gehoerte bis v1.12 NICHT dazu — das Dashboard wurde vom Update nie
+  # verteilt. Ein Fix daran kam auf dem Hub schlicht nicht an, obwohl "update"
+  # Erfolg meldete. Deshalb hier mit aufgenommen.
   for f in "$src"/agent-mesh "$src"/agent-mesh-*.sh "$src"/agent-mesh-*.py \
-           "$src"/mesh "$src"/mesh-*.sh "$src"/mesh-*.py; do
+           "$src"/agent-mesh-*.js \
+           "$src"/mesh "$src"/mesh-*.sh "$src"/mesh-*.py "$src"/mesh-*.js; do
     [ -f "$f" ] || continue
     local base; base=$(basename "$f")
     # ATOMARER Tausch (hermes-hetzner-Fund, v1.10.1): erst in Temp-Datei
