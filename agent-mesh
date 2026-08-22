@@ -280,6 +280,17 @@ PYEOF
     info "Hermes nicht gefunden — nur Git-Sync."
   fi
 
+  # ── Zustandsbericht mitveröffentlichen (Flotten-Übersicht) ──
+  # Git ist ohnehin die Datenebene: kein neuer Port, kein Dienst, funktioniert
+  # auch für Agents, die gerade offline sind, und die Historie fällt gratis ab.
+  # Best effort — ein Fehler hier darf einen sync niemals scheitern lassen.
+  if cmd_report --json > "$agent_dir/report.json" 2>/dev/null; then
+    :
+  else
+    rm -f "$agent_dir/report.json"
+    warn "Zustandsbericht konnte nicht erzeugt werden (sync läuft weiter)"
+  fi
+
   # Commit + Push
   git add -A 2>/dev/null
   if ! git diff --cached --quiet 2>/dev/null; then
@@ -756,7 +767,8 @@ case "${1:-}" in
   watch)   shift; cmd_watch "$@" ;;
   connect) shift; cmd_connect "$@" ;;
   doctor)  shift; cmd_doctor "$@" ;;
-  report)  shift; cmd_report ;;
+  report)  shift; cmd_report "$@" ;;
+  fleet)   shift; cmd_fleet "$@" ;;
   respond) shift; cmd_respond "$@" ;;
   service) shift; cmd_service "$@" ;;
   govern)  shift; cmd_govern "$@" ;;
@@ -764,7 +776,7 @@ case "${1:-}" in
   update)  shift; cmd_update "$@" ;;
   trust)   shift; cmd_trust "$@" ;;
   status)  shift; cmd_status ;;
-  *) echo "Usage: agent-mesh {init|sync|send|reply|inbox|route|role|agents|vault|insight|watch|connect|update|trust|doctor|report|status}" >&2; exit 1 ;;
+  *) echo "Usage: agent-mesh {init|sync|send|reply|inbox|route|role|agents|vault|insight|watch|connect|update|trust|doctor|report|fleet|status}" >&2; exit 1 ;;
 esac
 }
 main "$@"

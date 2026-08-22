@@ -6,6 +6,30 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.24.0
+
+**Fleet overview: `agent-mesh fleet`.**
+
+Every agent now publishes its own state report to `agents/<name>/report.json`
+on each `sync`, and the hub reads all of them at once:
+
+```
+AGENT                    VERSION   BERICHT  TRUST  KEYS   RELEASE    SEC     PROBLEME
+ax41                     1.24.0    12m      ja     ok     signiert   ok
+nucbox-evo-x2            1.12.1!   2d!      NEIN   FEHLT  kein Tag   3 offen  Keine Vertrauensbasis
+6 Agent(en) · 2 nicht auf v1.24.0 · 1 Bericht(e) älter als 24h · 4 mit offenen Punkten
+```
+
+Git carries it, so there is no new port, no service, and no agent that has to
+be online at the moment you ask. The report is a normal commit, which means
+the history of the fleet comes along for free.
+
+The `BERICHT` column is the one to read first: a report from two days ago
+describes a two-day-old state. A stale entry is marked, because the failure
+mode this whole tool exists to prevent is believing an outdated statement.
+
+Nothing to configure — the report appears with the next `sync`.
+
 ## v1.23.0
 
 **The dashboard now says why an OAuth login failed, and which version is

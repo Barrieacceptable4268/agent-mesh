@@ -224,7 +224,7 @@ security_checks() {
 
   echo ""
   if [ "$fail" -eq 0 ]; then
-    echo "✅ $ok Prüfungen bestanden — Sicherheitsstand v1.13.0 erreicht."
+    echo "✅ $ok Prüfungen bestanden — keine offenen Sicherheitsbefunde."
   else
     echo "⚠️  $ok bestanden, $fail offen — siehe die Hinweise oben."
     echo "   Vollständige Anleitung: $FRAMEWORK_DIR/MIGRATIONS.md"
@@ -242,42 +242,30 @@ security_checks() {
 # Deshalb hier ausschliesslich Beobachtungen aus dem Dateisystem und aus git.
 # Läuft bewusst auch auf einer Maschine, auf der nichts eingerichtet ist —
 # genau dann ist der Bericht am wertvollsten.
-cmd_report() {
+# Fakten einmal erheben, zweimal darstellen: einmal für Menschen, einmal als
+# JSON für die Flotten-Übersicht. Getrennte Erhebungen wären zwei Wahrheiten.
+# Setzt R_* Variablen.
+report_facts() {
   local home="${AGENT_MESH_HOME:-$HOME/.agent-mesh}"
   local conf="$home/agent-mesh.conf"
   local fw="$home/framework"
-  local name ver commit remote_ver behind trust tag_state signkey relay_tok
 
-  echo "═══ agent-mesh report ═══"
-  printf '%-14s %s\n' "zeit" "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  printf '%-14s %s (%s, bash %s)\n' "host" "$(hostname 2>/dev/null || echo '?')" \
-         "$(uname -sr 2>/dev/null || echo '?')" "${BASH_VERSION%%(*}"
+  R_TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  R_HOST=$(hostname 2>/dev/null || echo "?")
+  R_OS=$(uname -sr 2>/dev/null || echo "?")
+  R_AGENT=""; R_VERSION=""; R_COMMIT=""; R_REMOTE=""; R_INSTALLS=""
+  R_ONPATH=""; R_TRUST=""; R_RELEASE=""; R_KEYS=""; R_TOKEN="nein"
+  R_WATCHER="nein"; R_OK=0; R_BAD=0; R_ISSUES=""
 
-  if [ -f "$conf" ]; then
-    name=$(grep "^AGENT_NAME=" "$conf" 2>/dev/null | cut -d= -f2- | head -1)
-    printf '%-14s %s\n' "agent" "${name:-(kein AGENT_NAME in der conf)}"
-  else
-    printf '%-14s %s\n' "agent" "NICHT INITIALISIERT — keine $conf"
-  fi
+  [ -f "$conf" ] && R_AGENT=$(grep "^AGENT_NAME=" "$conf" 2>/dev/null | cut -d= -f2- | head -1)
 
-  # ── Framework-Klon ──
   if [ -d "$fw/.git" ]; then
-    ver=$(cat "$fw/VERSION" 2>/dev/null || echo "?")
-    commit=$(git -C "$fw" log -1 --format='%h %s' 2>/dev/null | cut -c1-58)
-    printf '%-14s v%s  (%s)\n' "framework" "$ver" "$commit"
-    remote_ver=$(git -C "$fw" show origin/main:VERSION 2>/dev/null || echo "?")
-    behind=$(git -C "$fw" rev-list --count HEAD..origin/main 2>/dev/null || echo "?")
-    if [ "$ver" = "$remote_ver" ]; then
-      printf '%-14s v%s — aktuell\n' "remote" "$remote_ver"
-    else
-      printf '%-14s v%s — %s Commit(s) voraus  ⚠️  UPDATE NÖTIG\n' "remote" "$remote_ver" "$behind"
-    fi
-  else
-    printf '%-14s %s\n' "framework" "KEIN KLON unter $fw"
+    R_VERSION=$(cat "$fw/VERSION" 2>/dev/null || echo "?")
+    R_COMMIT=$(git -C "$fw" log -1 --format='%h %s' 2>/dev/null | cut -c1-58)
+    R_REMOTE=$(git -C "$fw" show origin/main:VERSION 2>/dev/null || echo "?")
   fi
 
-  # ── Installationsorte: was liegt wo, und was greift wirklich ──
-  local d base f diffs total onpath
+  local d base f diffs total
   for d in /usr/local/bin "$HOME/.local/bin" /opt/homebrew/bin; do
     [ -f "$d/agent-mesh" ] || continue
     diffs=0; total=0
@@ -288,96 +276,186 @@ cmd_report() {
         [ -f "$d/$base" ] && cmp -s "$f" "$d/$base" || diffs=$((diffs+1))
       done
     fi
-    if [ "$total" -eq 0 ]; then
-      printf '%-14s %s — vorhanden, aber nicht vergleichbar (kein Framework-Klon)\n' "install" "$d"
-    elif [ "$diffs" -eq 0 ]; then
-      printf '%-14s %s — %s Dateien, deckungsgleich\n' "install" "$d" "$total"
-    else
-      printf '%-14s %s — %s von %s Dateien ABWEICHEND  ⚠️\n' "install" "$d" "$diffs" "$total"
-    fi
+    R_INSTALLS="$R_INSTALLS$d:$diffs/$total "
   done
-  onpath=$(command -v agent-mesh 2>/dev/null || echo "")
-  if [ -z "$onpath" ]; then
-    printf '%-14s %s\n' "auf PATH" "NICHT GEFUNDEN"
-  else
-    printf '%-14s %s\n' "auf PATH" "$onpath"
-  fi
+  R_ONPATH=$(command -v agent-mesh 2>/dev/null || echo "")
 
-  # ── Vertrauensbasis und Release-Signatur ──
   local sf="${AGENT_MESH_SIGNERS_FILE:-$home/trusted_signers}"
   if [ -s "$sf" ] && [ "$(grep -cvE '^[[:space:]]*(#|$)' "$sf" 2>/dev/null || echo 0)" -gt 0 ]; then
-    trust=$(awk '!/^[[:space:]]*(#|$)/{print $1}' "$sf" 2>/dev/null | tr '\n' ' ')
-    printf '%-14s %s\n' "trust" "$trust"
-  else
-    printf '%-14s %s\n' "trust" "FEHLT — agent-mesh trust"
+    R_TRUST=$(awk '!/^[[:space:]]*(#|$)/{print $1}' "$sf" 2>/dev/null | tr '\n' ' ')
   fi
 
-  tag_state="—"
-  if [ -d "$fw/.git" ] && [ -n "${ver:-}" ] && [ "$ver" != "?" ]; then
-    (cd "$fw" && git fetch --quiet origin "refs/tags/v$ver:refs/tags/v$ver" --force 2>/dev/null) || true
-    if (cd "$fw" && git rev-parse "v$ver" >/dev/null 2>&1); then
+  R_RELEASE="unbekannt"
+  if [ -d "$fw/.git" ] && [ -n "$R_VERSION" ] && [ "$R_VERSION" != "?" ]; then
+    (cd "$fw" && git fetch --quiet origin "refs/tags/v$R_VERSION:refs/tags/v$R_VERSION" --force 2>/dev/null) || true
+    if (cd "$fw" && git rev-parse "v$R_VERSION" >/dev/null 2>&1); then
       if (cd "$fw" && git -c gpg.format=ssh -c gpg.ssh.allowedSignersFile="$sf" \
-            verify-tag "v$ver" >/dev/null 2>&1); then
-        tag_state="v$ver signiert und vertrauenswürdig"
-      else
-        tag_state="v$ver vorhanden, aber NICHT verifizierbar  ⚠️"
-      fi
-    else
-      tag_state="kein Tag v$ver"
-    fi
-  fi
-  printf '%-14s %s\n' "release" "$tag_state"
-
-  # ── Schlüssel ──
-  if [ -n "${name:-}" ]; then
-    [ -f "$home/keys/$name.age" ] && signkey="age ✓" || signkey="age FEHLT"
-    if [ -f "$home/keys/$name.ssh" ]; then
-      signkey="$signkey · sign ✓"
-      if [ -f "$home/memories/vault/keys/$name.ssh.pub" ] \
-         && cmp -s "$home/keys/$name.ssh.pub" "$home/memories/vault/keys/$name.ssh.pub"; then
-        signkey="$signkey (veröffentlicht)"
-      else
-        signkey="$signkey (NICHT veröffentlicht — agent-mesh sync)  ⚠️"
-      fi
-    else
-      signkey="$signkey · sign FEHLT  ⚠️"
-    fi
-    printf '%-14s %s\n' "keys" "$signkey"
+            verify-tag "v$R_VERSION" >/dev/null 2>&1); then R_RELEASE="signiert"
+      else R_RELEASE="nicht verifizierbar"; fi
+    else R_RELEASE="kein Tag"; fi
   fi
 
-  if [ -f "$conf" ] && grep -q "^AGENT_MESH_RELAY_TOKEN=" "$conf" 2>/dev/null; then
-    printf '%-14s %s\n' "relay-token" "NOCH IN DER CONF — gehört entfernt  ⚠️"
+  if [ -n "$R_AGENT" ]; then
+    R_KEYS=""
+    [ -f "$home/keys/$R_AGENT.age" ] && R_KEYS="age" || R_KEYS="age-fehlt"
+    if [ -f "$home/keys/$R_AGENT.ssh" ]; then
+      if [ -f "$home/memories/vault/keys/$R_AGENT.ssh.pub" ] \
+         && cmp -s "$home/keys/$R_AGENT.ssh.pub" "$home/memories/vault/keys/$R_AGENT.ssh.pub"; then
+        R_KEYS="$R_KEYS,sign-publiziert"
+      else R_KEYS="$R_KEYS,sign-unpubliziert"; fi
+    else R_KEYS="$R_KEYS,sign-fehlt"; fi
   fi
 
-  # ── Läuft der Watcher? ──
-  # NICHT "ps ax | grep -q": grep -q schliesst die Pipe beim ersten Treffer,
-  # der Schreiber bekommt SIGPIPE, und "set -o pipefail" macht daraus einen
-  # Fehlschlag — die Bedingung wird also genau dann falsch, WENN es einen
-  # Treffer gibt. Faellt erst auf, wenn die Ausgabe den Pipe-Puffer (~64 KB)
-  # ueberschreitet, was bei ps ax der Fall ist.
-  if pgrep -f "[a]gent-mesh watch" >/dev/null 2>&1; then
-    printf '%-14s %s\n' "watcher" "läuft"
-  else
-    printf '%-14s %s\n' "watcher" "nicht aktiv"
-  fi
+  [ -f "$conf" ] && grep "^AGENT_MESH_RELAY_TOKEN=" "$conf" >/dev/null 2>&1 && R_TOKEN="ja"
+  pgrep -f "[a]gent-mesh watch" >/dev/null 2>&1 && R_WATCHER="ja"
 
-  # ── Sicherheits-Kurzfassung: nur die offenen Punkte ──
-  echo "───"
   if [ -f "$conf" ]; then
-    local out ok_n bad_n
+    local out
     out=$(cmd_doctor --security 2>&1 || true)
-    ok_n=$(printf '%s\n' "$out" | grep -c "✅" || true)
-    bad_n=$(printf '%s\n' "$out" | grep -c "❌" || true)
-    printf '%-14s %s bestanden, %s offen\n' "security" "${ok_n:-0}" "${bad_n:-0}"
-    if [ "${bad_n:-0}" -gt 0 ]; then
-      printf '%s\n' "$out" | grep "❌" | sed 's/^ */  /'
-    fi
-  else
-    printf '%-14s %s\n' "security" "nicht prüfbar (nicht initialisiert)"
+    R_OK=$(printf '%s\n' "$out" | grep -c "✅" || true)
+    R_BAD=$(printf '%s\n' "$out" | grep -c "❌" || true)
+    R_ISSUES=$(printf '%s\n' "$out" | grep "❌" | sed 's/^ *//' | head -8 || true)
   fi
+}
+
+# ── agent-mesh fleet ───────────────────────────────────────────────────────
+# Was der Hub über alle Agents weiß, ohne einen einzigen zu fragen: jeder legt
+# bei `sync` seinen Report als agents/<name>/report.json ab, hier werden sie
+# zusammengeführt. Wichtig ist die Spalte "alt" — ein Bericht von vorgestern
+# beschreibt nicht den heutigen Zustand, und das muss man SEHEN, statt es zu
+# übersehen.
+cmd_fleet() {
+  load_conf
+  local dir="$MEMORIES_DIR/agents"
+  [ -d "$dir" ] || die "Kein agents/-Verzeichnis — zuerst: agent-mesh sync"
+  local n=0 f
+  for f in "$dir"/*/report.json; do [ -f "$f" ] && n=$((n+1)); done
+  if [ "$n" -eq 0 ]; then
+    info "Noch keine Berichte. Jeder Agent liefert einen mit 'agent-mesh sync' (ab v1.24.0)."
+    return 0
+  fi
+  "$PYTHON_BIN" - "$dir" "$(git -C "$MEMORIES_DIR" show origin/main:VERSION 2>/dev/null || echo '')" << 'PYFLEET'
+import calendar, json, os, sys, time, glob
+
+base, newest = sys.argv[1], sys.argv[2].strip()
+rows = []
+for path in sorted(glob.glob(os.path.join(base, "*", "report.json"))):
+    try:
+        r = json.load(open(path, encoding="utf-8"))
+    except Exception:
+        rows.append({"agent": os.path.basename(os.path.dirname(path)),
+                     "broken": True}); continue
+    rows.append(r)
+
+def age(ts):
+    # Der Zeitstempel ist UTC. time.mktime() deutet ihn als Ortszeit, und ein
+    # Ausgleich ueber time.timezone geht in der Sommerzeit um eine Stunde
+    # daneben — timegm rechnet direkt in UTC.
+    try:
+        t = calendar.timegm(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))
+    except Exception:
+        return None
+    return (time.time() - t) / 3600.0
+
+def fmt_age(h):
+    if h is None: return "?"
+    if h < 1:   return f"{int(h*60)}m"
+    if h < 48:  return f"{int(h)}h"
+    return f"{int(h/24)}d"
+
+# Die neueste bekannte Version ist der Massstab, wenn origin nichts liefert
+if not newest:
+    newest = max([r.get("version", "") for r in rows if not r.get("broken")] or [""])
+
+print(f"{'AGENT':<24} {'VERSION':<9} {'BERICHT':<8} {'TRUST':<6} {'KEYS':<6} {'RELEASE':<10} {'SEC':<7} PROBLEME")
+print("─" * 108)
+stale, behind, unhealthy = 0, 0, 0
+for r in rows:
+    if r.get("broken"):
+        print(f"{r['agent']:<24} {'?':<9} {'defekt':<8} — Bericht nicht lesbar")
+        unhealthy += 1
+        continue
+    a = (r.get("agent") or "?")[:23]
+    v = r.get("version") or "?"
+    h = age(r.get("ts", ""))
+    old = h is not None and h > 24
+    if old: stale += 1
+    vmark = "" if v == newest else "!"
+    if vmark: behind += 1
+    trust = "ja" if r.get("trust") else "NEIN"
+    keys = "ok" if "sign-publiziert" in (r.get("keys") or "") else "FEHLT"
+    rel = (r.get("release") or "?")[:10]
+    bad = r.get("bad", 0)
+    sec = "ok" if bad == 0 else f"{bad} offen"
+    if bad or trust == "NEIN" or keys == "FEHLT" or vmark: unhealthy += 1
+    first = (r.get("issues") or [""])[0][:34]
+    print(f"{a:<24} {v+vmark:<9} {fmt_age(h)+('!' if old else ''):<8} "
+          f"{trust:<6} {keys:<6} {rel:<10} {sec:<7} {first}")
+
+print("─" * 108)
+print(f"{len(rows)} Agent(en) · {behind} nicht auf v{newest} · {stale} Bericht(e) älter als 24h "
+      f"· {unhealthy} mit offenen Punkten")
+if stale:
+    print("Hinweis: ein alter Bericht beschreibt einen alten Zustand — dort zuerst 'agent-mesh sync'.")
+PYFLEET
+}
+
+# ── agent-mesh report [--json] ─────────────────────────────────────────────
+# Kompakter, kopierbarer Zustandsbericht aus nachprüfbaren Beobachtungen.
+# Entstanden, weil beim ersten Flotten-Rollout vier Prosa-Berichte Zustände
+# beschrieben, die es nicht gab — nicht aus Nachlässigkeit, sondern weil die
+# Werkzeuge meldeten, was sie TATEN, nicht was dabei herauskam.
+cmd_report() {
+  report_facts
+  if [ "${1:-}" = "--json" ]; then
+    "$PYTHON_BIN" - "$R_TS" "$R_HOST" "$R_OS" "$R_AGENT" "$R_VERSION" "$R_COMMIT" \
+      "$R_REMOTE" "$R_INSTALLS" "$R_ONPATH" "$R_TRUST" "$R_RELEASE" "$R_KEYS" \
+      "$R_TOKEN" "$R_WATCHER" "$R_OK" "$R_BAD" "$R_ISSUES" << 'PYJSON'
+import json, sys
+k = ["ts","host","os","agent","version","commit","remote","installs","onpath",
+     "trust","release","keys","relay_token","watcher","ok","bad","issues"]
+v = sys.argv[1:18]
+d = dict(zip(k, v))
+d["ok"] = int(d["ok"] or 0); d["bad"] = int(d["bad"] or 0)
+d["installs"] = [x for x in d["installs"].split() if x]
+d["issues"] = [x for x in d["issues"].split("\n") if x.strip()]
+print(json.dumps(d, ensure_ascii=False, indent=2, sort_keys=True))
+PYJSON
+    return 0
+  fi
+
+  echo "═══ agent-mesh report ═══"
+  printf '%-14s %s\n' "zeit" "$R_TS"
+  printf '%-14s %s (%s, bash %s)\n' "host" "$R_HOST" "$R_OS" "${BASH_VERSION%%(*}"
+  printf '%-14s %s\n' "agent" "${R_AGENT:-NICHT INITIALISIERT}"
+  if [ -n "$R_VERSION" ]; then
+    printf '%-14s v%s  (%s)\n' "framework" "$R_VERSION" "$R_COMMIT"
+    if [ "$R_VERSION" = "$R_REMOTE" ]; then printf '%-14s v%s — aktuell\n' "remote" "$R_REMOTE"
+    else printf '%-14s v%s  ⚠️  UPDATE NÖTIG\n' "remote" "$R_REMOTE"; fi
+  else
+    printf '%-14s %s\n' "framework" "KEIN KLON"
+  fi
+  local i
+  for i in $R_INSTALLS; do
+    case "${i##*:}" in
+      0/0) printf '%-14s %s — nicht vergleichbar (kein Klon)\n' "install" "${i%%:*}" ;;
+      0/*) printf '%-14s %s — %s Dateien, deckungsgleich\n' "install" "${i%%:*}" "${i##*/}" ;;
+      *)   printf '%-14s %s — %s ABWEICHEND  ⚠️\n' "install" "${i%%:*}" "${i##*:}" ;;
+    esac
+  done
+  printf '%-14s %s\n' "auf PATH" "${R_ONPATH:-NICHT GEFUNDEN}"
+  printf '%-14s %s\n' "trust" "${R_TRUST:-FEHLT — agent-mesh trust}"
+  printf '%-14s %s\n' "release" "$R_RELEASE"
+  [ -n "$R_KEYS" ] && printf '%-14s %s\n' "keys" "$R_KEYS"
+  [ "$R_TOKEN" = "ja" ] && printf '%-14s %s\n' "relay-token" "NOCH IN DER CONF  ⚠️"
+  printf '%-14s %s\n' "watcher" "$R_WATCHER"
+  echo "───"
+  printf '%-14s %s bestanden, %s offen\n' "security" "$R_OK" "$R_BAD"
+  [ -n "$R_ISSUES" ] && printf '%s\n' "$R_ISSUES" | sed 's/^/  /'
   echo "═══ ende ═══"
   return 0
 }
+
 
 cmd_doctor() {
   local mode="all"
