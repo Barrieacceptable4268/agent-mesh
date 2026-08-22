@@ -91,6 +91,82 @@ push_retry() {
   return 1
 }
 
+# ── Peer-Kommunikation (WebSocket-Relay, 2026-08-22) ──
+# send versucht ZUERST den Relay (sofortige Zustellung), Fallback auf Git.
+# Relay-Config aus conf: AGENT_MESH_RELAY_URL + AGENT_MESH_RELAY_TOKEN
+PEER_PY="$AGENT_MESH_HOME/framework/peer_client.py"
+[ -f "$PEER_PY" ] || PEER_PY="/usr/local/bin/agent-mesh-peer-client.py"
+
+peer_available() {
+  [ -n "$(grep '^AGENT_MESH_RELAY_URL=' "$CONF" 2>/dev/null | cut -d= -f2-)" ] \
+    && [ -n "$(grep '^AGENT_MESH_RELAY_TOKEN=' "$CONF" 2>/dev/null | cut -d= -f2-)" ] \
+    && [ -f "$PEER_PY" ]
+}
+
+# Nachricht über Relay senden (sofort) — true wenn zugestellt (oder gequeued)
+peer_send() {
+  # $1 = Empfänger, $2 = Pfad zur .enc-Datei (verschlüsselter Blob)
+  local to="$1" encfile="$2"
+  peer_available || return 1
+  local url token
+  url=$(grep "^AGENT_MESH_RELAY_URL=" "$CONF" | cut -d= -f2-)
+  token=$(grep "^AGENT_MESH_RELAY_TOKEN=" "$CONF" | cut -d= -f2-)
+  [ -n "$url" ] || return 1
+  [ -n "$token" ] || return 1
+  [ -n "$AGENT_NAME" ] || return 1
+  # Blob base64-encodieren (JSON-sicher)
+  local blob
+  blob=$(base64 -w0 "$encfile" 2>/dev/null || base64 "$encfile" 2>/dev/null | tr -d '\n')
+  [ -n "$blob" ] || return 1
+  timeout 8 "$PYTHON_BIN" "$PEER_PY" --url "$url" --token "$token" \
+    --agent "$AGENT_NAME" --to "$to" --blob "$blob" >/dev/null 2>&1
+}
+
+# Inbox über Relay empfangen (offline-gequeued Nachrichten) — in Git-Mailbox übertragen
+peer_recv() {
+  # conf selbst laden (peer-recv als eigenständiger Befehl)
+  if ! command -v load_conf >/dev/null 2>&1 || [ -z "${AGENT_NAME:-}" ]; then
+    load_conf 2>/dev/null || true
+  fi
+  peer_available || return 1
+  local url token
+  url=$(grep "^AGENT_MESH_RELAY_URL=" "$CONF" | cut -d= -f2-)
+  token=$(grep "^AGENT_MESH_RELAY_TOKEN=" "$CONF" | cut -d= -f2-)
+  [ -n "$url" ] || return 1
+  [ -n "$token" ] || return 1
+  [ -n "$AGENT_NAME" ] || return 1
+  local tmp; tmp=$(mktemp)
+  if timeout 8 "$PYTHON_BIN" "$PEER_PY" --url "$url" --token "$token" \
+    --agent "$AGENT_NAME" --recv > "$tmp" 2>/dev/null; then
+    # Blobs in Mailbox-Dateien übertragen (falls vorhanden)
+    while IFS='|' read -r from blob; do
+      [ -n "$from" ] || continue
+      [ -n "$blob" ] || continue
+      local id; id=$(next_msg_id)
+      local dir="$MESSAGES_DIR/$AGENT_NAME"
+      mkdir -p "$dir"
+      # Blob base64-dekodieren → .enc-Datei
+      echo "$blob" | base64 -d 2>/dev/null > "$dir/$id.json.enc" || continue
+      cat > "$dir/$id.json" << EOF
+{
+  "id": "$id",
+  "from": "$from",
+  "to": "$AGENT_NAME",
+  "type": "message",
+  "encrypted": true,
+  "ts": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+  "reply_to": null,
+  "via": "peer"
+}
+EOF
+    done < "$tmp"
+    rm -f "$tmp"
+    return 0
+  fi
+  rm -f "$tmp"
+  return 1
+}
+
 next_msg_id() {
   # Monotone ID: timestamp + kurzer Zufall (Kollisionen unwahrscheinlich)
   echo "$(date -u +%Y%m%d%H%M%S)-$RANDOM"
@@ -147,6 +223,12 @@ cmd_send() {
 EOF
   # Verschlüsselten Text als separate Datei ablegen
   echo "$enc" > "$(msg_enc "$f")"
+
+  # ── Peer zuerst (sofort!), sonst Git (Fallback) ──
+  if peer_send "$to" "$(msg_enc "$f")"; then
+    info "⚡ Sofort zugestellt via Relay (ID: $id)"
+    # Trotzdem nach Git committen (Duplikat-Toleranz: Empfänger dedupliziert via ID)
+  fi
 
   cd "$MEMORIES_DIR" && git add "messages/$to/$id.json" "messages/$to/$id.json.enc" >/dev/null 2>&1
   git commit -m "msg: $AGENT_NAME → $to (verschlüsselt)" >/dev/null 2>&1

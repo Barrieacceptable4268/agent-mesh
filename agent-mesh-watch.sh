@@ -95,6 +95,8 @@ while true; do
         || log "⚠️  Auto-Respond meldete Fehler (Log: $AGENT_MESH_HOME/watch.log)"
     fi
   fi
+  # Peer-Empfang: Relay-Queue leeren (Echtzeit-Nachrichten, die wir verpasst haben)
+  "$BIN" peer-recv >> "$AGENT_MESH_HOME/watch.log" 2>&1 || true
   sleep "$INTERVAL"
 done
 }

@@ -476,6 +476,7 @@ case "${1:-}" in
   sync)    shift; cmd_sync ;;
   send)    shift; cmd_send "$@" ;;
   broadcast) shift; cmd_broadcast "$@" ;;
+  peer-recv) shift; peer_recv ;;
   reply)   shift; cmd_reply "$@" ;;
   inbox)   shift; cmd_inbox ;;
   route)   shift; cmd_route "$@" ;;

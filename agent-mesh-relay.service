@@ -1,0 +1,18 @@
+[Unit]
+Description=Agent-Mesh Relay (WebSocket — Echtzeit-Nachrichten zwischen Agents)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+Environment=AGENT_MESH_RELAY_TOKEN=%i
+EnvironmentFile=-/etc/agent-mesh/relay.env
+# Hermes-venv-Python nutzen (dort ist websockets installiert)
+Environment=PATH=/usr/local/lib/hermes-agent/venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/usr/local/lib/hermes-agent/venv/bin/python3 /usr/local/bin/agent-mesh-relay.py --port 8766 --queue-dir /var/lib/agent-mesh-relay
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target
