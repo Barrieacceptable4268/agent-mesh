@@ -88,6 +88,32 @@ security_checks() {
   [ "$drift" = "0" ] && pass "Keine Key-Abweichungen"
 
   echo ""
+  echo "── Update-Signaturen (Befund 8) ──"
+  local sf="${AGENT_MESH_SIGNERS_FILE:-$AGENT_MESH_HOME/trusted_signers}"
+  if [ -s "$sf" ] && [ "$(grep -cvE '^[[:space:]]*(#|$)' "$sf")" -gt 0 ]; then
+    pass "Vertrauensbasis hinterlegt ($(grep -cvE '^[[:space:]]*(#|$)' "$sf") Schlüssel)"
+    local rv tag
+    rv=$(cat "$FRAMEWORK_DIR/VERSION" 2>/dev/null || echo "")
+    tag="v$rv"
+    if [ -n "$rv" ] && (cd "$FRAMEWORK_DIR" && git rev-parse "$tag" >/dev/null 2>&1); then
+      if (cd "$FRAMEWORK_DIR" && git -c gpg.format=ssh \
+            -c gpg.ssh.allowedSignersFile="$sf" verify-tag "$tag" >/dev/null 2>&1); then
+        pass "Aktuelles Release $tag ist gültig signiert"
+      else
+        bad "Release $tag lässt sich NICHT verifizieren"
+        note "Der nächste 'agent-mesh update' wird verweigern. Prüfen:"
+        note "  agent-mesh trust --show"
+      fi
+    else
+      bad "Kein Tag '$tag' im Framework-Klon — Releases werden nicht signiert?"
+      note "Maintainer: siehe docs/RELEASING.md"
+    fi
+  else
+    bad "Keine Vertrauensbasis für Release-Signaturen hinterlegt"
+    note "Ohne sie verweigert jedes Update: agent-mesh trust"
+  fi
+
+  echo ""
   echo "── Framework-Stand ──"
   local v; v=$(cat "$FRAMEWORK_DIR/VERSION" 2>/dev/null || echo "?")
   case "$v" in

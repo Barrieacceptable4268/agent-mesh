@@ -30,6 +30,54 @@ remote_version() {
   fi
 }
 
+# ── Signatur-Prüfung für Releases (Audit-Befund 8) ──
+# Bis v1.13 installierte jeder Agent stündlich als root, was gerade im
+# Public-Repo stand — ungeprüft. Wer dort pushen konnte, besass damit binnen
+# einer Stunde jede Maschine im Mesh. Aus einer einzelnen Kompromittierung
+# wurde so eine Mesh-weite.
+#
+# Ab v1.14.0 wird nur noch installiert, was als Git-Tag mit einem
+# VERTRAUTEN SSH-Key signiert ist — und der Inhalt kommt aus dem TAG, nicht
+# aus main (sonst genügte ein altes signiertes Tag plus manipuliertes main).
+#
+# Die Vertrauensbasis liegt LOKAL beim Agent, nicht im Repo: wer das Repo
+# manipulieren kann, darf nicht zugleich festlegen, wem der Agent vertraut.
+SIGNERS_FILE="${AGENT_MESH_SIGNERS_FILE:-$AGENT_MESH_HOME/trusted_signers}"
+
+# Signatur eines Release-Tags prüfen. 0 = vertrauenswürdig.
+verify_release_tag() {
+  # $1 = Tag-Name (z.B. v1.14.0)
+  local tag="$1"
+  if [ ! -s "$SIGNERS_FILE" ]; then
+    echo "  ❌ Keine vertrauten Signaturschlüssel hinterlegt ($SIGNERS_FILE)" >&2
+    echo "     → einmalig einrichten: agent-mesh trust" >&2
+    return 1
+  fi
+  ( cd "$FRAMEWORK_DIR" && git fetch --quiet origin "refs/tags/$tag:refs/tags/$tag" --force 2>/dev/null ) || true
+  local out rc
+  out=$(cd "$FRAMEWORK_DIR" && git -c gpg.format=ssh \
+          -c gpg.ssh.allowedSignersFile="$SIGNERS_FILE" \
+          verify-tag "$tag" 2>&1)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "  ❌ Signatur von '$tag' NICHT vertrauenswürdig — Update abgebrochen." >&2
+    echo "$out" | sed 's/^/     /' >&2
+    echo "     Mögliche Gründe: Tag unsigniert, mit fremdem Key signiert," >&2
+    echo "     oder dein trusted_signers ist veraltet (agent-mesh trust --show)." >&2
+    return 1
+  fi
+  echo "  🔏 $tag: $(echo "$out" | head -1)"
+  return 0
+}
+
+# Versionsvergleich: 0 wenn $1 < $2 (echter Fortschritt)
+version_lt() {
+  [ "$1" = "$2" ] && return 1
+  local lo
+  lo=$(printf '%s\n%s\n' "$1" "$2" | sort -t. -k1,1n -k2,2n -k3,3n | head -1)
+  [ "$lo" = "$1" ]
+}
+
 # Framework-Dateien installieren (mesh + Module)
 install_framework() {
   local src="$FRAMEWORK_DIR"
@@ -112,6 +160,73 @@ MIGPY
   echo ""
 }
 
+# ── agent-mesh trust — Vertrauensbasis für Release-Signaturen ──
+# Gleiches Muster wie beim Key-Pinning (Befund 6): beim ersten Mal übernehmen
+# und laut sagen, danach jede Änderung als Ereignis behandeln statt still zu
+# akzeptieren. Die Datei im Repo ist nur ein VORSCHLAG — massgeblich ist die
+# lokale Kopie, sonst bestimmt der, der das Repo manipuliert, auch das
+# Vertrauen.
+cmd_trust() {
+  load_conf
+  local repo_file="$FRAMEWORK_DIR/.github/allowed_signers"
+  local sub="${1:-}"
+
+  case "$sub" in
+    --show|show)
+      if [ -s "$SIGNERS_FILE" ]; then
+        echo "Vertraute Release-Signaturschlüssel ($SIGNERS_FILE):"
+        sed 's/^/  /' "$SIGNERS_FILE"
+      else
+        echo "Keine vertrauten Schlüssel hinterlegt ($SIGNERS_FILE)."
+        echo "→ einrichten: agent-mesh trust"
+      fi
+      return 0 ;;
+  esac
+
+  [ -f "$repo_file" ] || die "Im Framework-Klon fehlt .github/allowed_signers — zuerst: agent-mesh sync"
+
+  # Eine Datei aus lauter Kommentaren ist KEINE Vertrauensbasis. Sonst pinnt
+  # der Agent etwas Leeres, und jede spätere Signaturprüfung scheitert mit
+  # einer Meldung, die das eigentliche Problem verdeckt.
+  if [ "$(grep -cvE '^[[:space:]]*(#|$)' "$repo_file")" -eq 0 ]; then
+    die "In .github/allowed_signers steht noch kein Schlüssel — das Projekt hat
+  die Release-Signierung noch nicht eingerichtet.
+  → Anleitung: $FRAMEWORK_DIR/docs/RELEASING.md"
+  fi
+
+  if [ ! -s "$SIGNERS_FILE" ]; then
+    mkdir -p "$(dirname "$SIGNERS_FILE")"
+    cp "$repo_file" "$SIGNERS_FILE"
+    chmod 600 "$SIGNERS_FILE"
+    echo "🔏 Release-Signaturschlüssel erstmalig übernommen:"
+    sed 's/^/  /' "$SIGNERS_FILE"
+    echo ""
+    echo "Ab jetzt installiert dieser Agent nur noch Releases, die mit einem"
+    echo "dieser Schlüssel signiert sind. Prüfe die Fingerabdrücke bei"
+    echo "Gelegenheit über einen zweiten Kanal gegen den Maintainer."
+    return 0
+  fi
+
+  if cmp -s "$repo_file" "$SIGNERS_FILE"; then
+    echo "✅ Vertrauensbasis unverändert — nichts zu tun."
+    return 0
+  fi
+
+  echo "⚠️  Die Signaturschlüssel im Repo weichen von deinen lokalen ab:"
+  echo ""
+  diff -u "$SIGNERS_FILE" "$repo_file" 2>/dev/null | sed 's/^/  /' | tail -20
+  echo ""
+  echo "Das ist entweder ein legitimer Schlüsselwechsel — oder jemand versucht,"
+  echo "sich selbst zu einem vertrauenswürdigen Herausgeber zu machen."
+  echo "→ NICHT bestätigen, ohne die neuen Fingerabdrücke über einen ZWEITEN"
+  echo "  Kanal (Anruf, Signal) mit dem Maintainer abgeglichen zu haben."
+  read -r -p "👉 Neue Schlüssel übernehmen? (uebernehmen) " answer
+  [ "$(lower_of "$answer")" = "uebernehmen" ] || die "Abgebrochen — Vertrauensbasis unverändert."
+  cp "$repo_file" "$SIGNERS_FILE"
+  chmod 600 "$SIGNERS_FILE"
+  echo "✅ Vertrauensbasis aktualisiert."
+}
+
 # Optional: Hermes selbst aktualisieren
 update_hermes() {
   if command -v hermes >/dev/null 2>&1; then
@@ -142,16 +257,32 @@ cmd_update() {
 
   if [ "$(local_version)" != "$remote" ] || [ "${1:-}" = "--force" ]; then
     local before; before=$(local_version)
-    echo "── Pull vom public Repo ──"
-    if [ -d "$FRAMEWORK_DIR/.git" ]; then
-      # Framework-Klon ist nur ein Cache — lokale Änderungen (z.B. Test-VERSION)
-      # sind safe zu verwerfen/stashen. Erst versuchen sauber zu pullen, sonst hard-reset.
-      (cd "$FRAMEWORK_DIR" && git pull --rebase origin main 2>&1 | tail -1) \
-        || (cd "$FRAMEWORK_DIR" && git stash 2>/dev/null; git reset --hard origin/main 2>&1 | tail -1)
-    else
-      # Repo fehlt → klonen
+
+    # Repo fehlt → klonen (ohne Klon kann nichts geprüft werden)
+    if [ ! -d "$FRAMEWORK_DIR/.git" ]; then
       GIT_SSH_COMMAND="${GIT_SSH_COMMAND:-}" git clone "git@github.com:$GH_ORG/$PUBLIC_REPO.git" "$FRAMEWORK_DIR" 2>&1 | tail -1
     fi
+
+    # Downgrade-Schutz: ein manipuliertes main könnte VERSION auf ein altes,
+    # gültig signiertes Release zurückdrehen und so eine geflickte Lücke
+    # wieder aufreissen.
+    if [ "${1:-}" != "--force" ] && version_lt "$remote" "$before"; then
+      echo "❌ Remote-Version v$remote ist ÄLTER als die lokale v$before — abgebrochen."
+      echo "   Das ist entweder ein Versehen oder ein Downgrade-Versuch."
+      echo "   Bewusst zurück: agent-mesh update --force"
+      return 1
+    fi
+
+    echo "── Release-Signatur prüfen ──"
+    if ! verify_release_tag "v$remote"; then
+      echo "❌ Update NICHT durchgeführt. Der Agent bleibt auf v$before."
+      return 1
+    fi
+
+    echo "── Auf das signierte Tag setzen ──"
+    # Bewusst aus dem TAG, nicht aus main: nur der Tag ist signiert.
+    (cd "$FRAMEWORK_DIR" && git reset --hard "v$remote" 2>&1 | tail -1)
+
     echo "── Installieren ──"
     install_framework
     echo "✅ Update abgeschlossen — neue Version: v$(local_version)"

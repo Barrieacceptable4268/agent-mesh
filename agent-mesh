@@ -647,8 +647,9 @@ case "${1:-}" in
   govern)  shift; cmd_govern "$@" ;;
   autofix) shift; cmd_autofix "$@" ;;
   update)  shift; cmd_update "$@" ;;
+  trust)   shift; cmd_trust "$@" ;;
   status)  shift; cmd_status ;;
-  *) echo "Usage: agent-mesh {init|sync|send|reply|inbox|route|role|agents|vault|insight|watch|connect|update|status}" >&2; exit 1 ;;
+  *) echo "Usage: agent-mesh {init|sync|send|reply|inbox|route|role|agents|vault|insight|watch|connect|update|trust|doctor|status}" >&2; exit 1 ;;
 esac
 }
 main "$@"

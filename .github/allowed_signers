@@ -1,0 +1,13 @@
+# Release signing keys for agent-mesh.
+#
+# Every agent verifies release tags against this list before installing an
+# update. `agent-mesh trust` copies it to ~/.agent-mesh/trusted_signers on
+# first use and treats any later change as an event, not as routine.
+#
+# Format: <principal> <key-type> <base64-key>
+# Example:
+#   release@moinsen.dev ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAA...
+#
+# NOT YET CONFIGURED — see docs/RELEASING.md. Until a real key is listed here,
+# agents refuse to install updates. That is deliberate: an empty trust base
+# must block, never wave things through.

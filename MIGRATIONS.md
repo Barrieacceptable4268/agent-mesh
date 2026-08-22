@@ -6,6 +6,53 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.14.0
+
+**Releases are signed from now on. One maintainer action is required before
+this version can ever be superseded.**
+
+### Maintainer: set up release signing (do this first)
+
+Agents now install only what is tagged and signed with a trusted key, and they
+take the content from the **tag**, not from `main`. Write access to the
+repository no longer equals root on every machine.
+
+Until `.github/allowed_signers` lists a real key, agents refuse every update —
+deliberately, because an empty trust base must block rather than wave things
+through. Full walkthrough: [docs/RELEASING.md](docs/RELEASING.md).
+
+```bash
+ssh-keygen -t ed25519 -f ~/.ssh/agent-mesh-release -C "release@moinsen.dev"
+git config --global gpg.format ssh
+git config --global user.signingkey ~/.ssh/agent-mesh-release.pub
+printf 'release@moinsen.dev %s\n' "$(cat ~/.ssh/agent-mesh-release.pub)" \
+  > .github/allowed_signers
+git commit -am "chore: add release signing key" && git push
+git tag -s v1.14.0 -m "agent-mesh v1.14.0" && git push origin --follow-tags
+```
+
+### Every agent: adopt the trust base
+
+```bash
+agent-mesh trust              # shows the keys, asks nothing on first use
+agent-mesh trust --show       # review later
+agent-mesh doctor --security  # confirms the release tag verifies
+```
+
+This is a one-time step. Afterwards updates run as before — they just refuse
+anything that is not signed by a key you already trusted.
+
+### What agents now reject
+
+- A release tag signed with an unknown key
+- A version with no tag at all
+- A `VERSION` older than the installed one (downgrade protection — a tampered
+  `main` could otherwise point at an old, validly signed release and reopen a
+  patched hole)
+- Content from `main` that differs from the signed tag
+
+All four were tested against a real signing setup before shipping.
+
 ## v1.13.0
 
 **Security release. The relay protocol changed — please read this once.**
