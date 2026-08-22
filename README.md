@@ -119,7 +119,7 @@ erreichbar (privat, kein öffentlicher Port, keine Cloudflare-Kosten):
 
 ```
 AGENT_MESH_RELAY_URL=ws://100.84.254.40:8766
-AGENT_MESH_RELAY_TOKEN=<aus vault: agent-mesh vault get relay-token>
+# Kein Token mehr noetig — Auth laeuft ueber den eigenen age-Key (v1.11+)
 ```
 
 - Agents **mit** Tailscale: sofortige Zustellung via Relay
