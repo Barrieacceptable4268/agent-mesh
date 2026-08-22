@@ -164,7 +164,7 @@ security_checks() {
     else
       # Zwischen "gibt es nicht" und "haben wir nur nicht" unterscheiden —
       # das sind zwei völlig verschiedene Aufgaben für zwei verschiedene Leute.
-      if (cd "$FRAMEWORK_DIR" && git ls-remote --tags origin "refs/tags/$tag" 2>/dev/null | grep -q .); then
+      if (cd "$FRAMEWORK_DIR" && git ls-remote --tags origin "refs/tags/$tag" 2>/dev/null | grep . >/dev/null); then
         bad "Tag '$tag' liegt auf dem Remote, fehlt aber lokal — Klon unvollständig"
         note "  cd $FRAMEWORK_DIR && git fetch --tags origin"
       else
@@ -350,7 +350,12 @@ cmd_report() {
   fi
 
   # ── Läuft der Watcher? ──
-  if ps ax 2>/dev/null | grep -q "[a]gent-mesh watch"; then
+  # NICHT "ps ax | grep -q": grep -q schliesst die Pipe beim ersten Treffer,
+  # der Schreiber bekommt SIGPIPE, und "set -o pipefail" macht daraus einen
+  # Fehlschlag — die Bedingung wird also genau dann falsch, WENN es einen
+  # Treffer gibt. Faellt erst auf, wenn die Ausgabe den Pipe-Puffer (~64 KB)
+  # ueberschreitet, was bei ps ax der Fall ist.
+  if pgrep -f "[a]gent-mesh watch" >/dev/null 2>&1; then
     printf '%-14s %s\n' "watcher" "läuft"
   else
     printf '%-14s %s\n' "watcher" "nicht aktiv"
@@ -447,7 +452,7 @@ cmd_doctor() {
       if SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops --encrypt \
            --age "$AGE_PUB" --input-type json --output-type yaml "$tmp" 2>/dev/null \
          | SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops -d --input-type yaml --output-type json /dev/stdin 2>/dev/null \
-         | grep -q '"doctor": "ok"'; then
+         | grep '"doctor": "ok"' >/dev/null; then
         pass "Verschlüsselungs-Selbsttest: Encrypt+Decrypt ok"
       else
         bad "Selbsttest fehlgeschlagen — sops/age-Konfiguration prüfen"

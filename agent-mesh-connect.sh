@@ -37,7 +37,7 @@ cmd_connect() {
   fi
 
   # ── 2. Bereits eingeloggt? ──
-  if gh auth status 2>/dev/null | grep -q "Logged in"; then
+  if gh auth status 2>/dev/null | grep "Logged in" >/dev/null; then
     local who
     who=$(gh api user --jq .login 2>/dev/null || echo "?")
     echo "──────────────────────────────────────────────"

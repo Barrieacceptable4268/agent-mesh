@@ -121,7 +121,7 @@ EOF
     -d @"$out" 2>/dev/null \
     | "$PYTHON_BIN" -c "import json,sys;print(json.load(sys.stdin)['choices'][0]['message']['content'])" 2>/dev/null || true)
   echo "$reply" > "$out"
-  echo "$reply" | grep -q '"files"' && return 0 || return 1
+  echo "$reply" | grep '"files"' >/dev/null && return 0 || return 1
 }
 
 # ── Fix anwenden (aus LLM-JSON) ──

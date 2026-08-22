@@ -139,7 +139,7 @@ svc_status() {
       fi
       ;;
     macos)
-      if launchctl list 2>/dev/null | grep -q "$SVC_LABEL"; then
+      if launchctl list 2>/dev/null | grep "$SVC_LABEL" >/dev/null; then
         echo "✅ $SVC_LABEL: aktiv"
       else
         echo "❌ $SVC_LABEL: nicht geladen — 'agent-mesh service install' ausführen"

@@ -28,7 +28,14 @@ if [ -z "$BIN_DIR" ]; then
   else BIN_DIR="$HOME/.local/bin"; fi
 fi
 mkdir -p "$BIN_DIR"
-NAME="${AGENT_MESH_NAME:-$(hostname | tr '[:upper:]' '[:lower:]' | tr -c 'a-z0-9' '-')}"
+# Der Name ist eine Identität im Mesh — er steht in jeder Nachricht und in
+# jedem Dateipfad. "tr -c" wandelt auch den Zeilenumbruch, was einen
+# abschliessenden Bindestrich hinterliess (macbookpro-m4-fritz-box-).
+# Deshalb: Mehrfach-Bindestriche zusammenziehen und die Ränder trimmen.
+NAME="${AGENT_MESH_NAME:-$(hostname 2>/dev/null \
+  | tr '[:upper:]' '[:lower:]' \
+  | tr -c 'a-z0-9' '-' \
+  | sed -e 's/-\{2,\}/-/g' -e 's/^-//' -e 's/-$//')}"
 
 say() { printf '\033[1;34m[agent-mesh]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[agent-mesh]\033[0m ⚠ %s\n' "$*"; }
@@ -45,7 +52,14 @@ command -v hermes >/dev/null 2>&1 || warn "hermes fehlt — Wissen-Export nur mi
 
 # ── 2. Framework-Dateien holen ──
 say "Lade Framework vom public Repo ($REPO@$BRANCH)…"
-for f in agent-mesh agent-mesh-a2a.sh agent-mesh-update.sh agent-mesh-webhook.py agent-mesh-watch.sh agent-mesh-connect.sh agent-mesh-watch.service agent-mesh-doctor.sh agent-mesh-responder.sh agent-mesh-service.sh agent-mesh-relay.py agent-mesh-peer-client.py; do
+# Diese Liste muss zu dem passen, was install_framework beim Update verteilt —
+# sonst fehlen frisch installierten Agents Module, die Bestands-Agents haben.
+# dashboard.js, autofix.sh und govern.sh fehlten hier bis v1.22.0.
+for f in agent-mesh agent-mesh-a2a.sh agent-mesh-update.sh agent-mesh-webhook.py \
+         agent-mesh-watch.sh agent-mesh-connect.sh agent-mesh-doctor.sh \
+         agent-mesh-responder.sh agent-mesh-service.sh agent-mesh-govern.sh \
+         agent-mesh-autofix.sh agent-mesh-relay.py agent-mesh-peer-client.py \
+         agent-mesh-dashboard.js agent-mesh-watch.service; do
   curl -fsSL "$RAW/$f" -o "$BIN_DIR/$f" 2>/dev/null \
     || die "Download fehlgeschlagen: $f (Netz? Repo-Name?)"
   chmod +x "$BIN_DIR/$f" 2>/dev/null || true
@@ -70,7 +84,7 @@ say "Prüfe GitHub-SSH-Zugang…"
 # WICHTIG: ssh gibt trotz erfolgreicher Auth manchmal exit 1 (TTY/redirect-Quirk)
 # UND pipefail lässt die Pipe fehlschlagen → Ausgabe in Variable, dann grep
 SSH_OUT=$(ssh -o BatchMode=yes -o ConnectTimeout=10 -T git@github.com 2>&1 || true)
-if ! echo "$SSH_OUT" | grep -q "successfully authenticated"; then
+if ! echo "$SSH_OUT" | grep "successfully authenticated" >/dev/null; then
   warn "GitHub-SSH-Key fehlt — bitte einmal einrichten:"
   echo "    ssh-keygen -t ed25519"
   echo "    cat ~/.ssh/id_ed25519.pub   # auf https://github.com/settings/keys hinterlegen"

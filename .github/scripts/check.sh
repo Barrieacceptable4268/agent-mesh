@@ -18,7 +18,7 @@ note() { printf '  %s\n' "$*"; }
 # grep liefert "datei:zeile:inhalt" — der Kommentar-Anker muss also hinter dem
 # zweiten Doppelpunkt greifen, nicht am Zeilenanfang. (Erster Lauf dieses
 # Gates hat sich prompt an den eigenen erklärenden Kommentaren verschluckt.)
-no_comments() { grep -vE '^[^:]+:[0-9]+:[[:space:]]*#' || true; }
+no_comments() { grep -vE '^([^:]*:)?[0-9]+:[[:space:]]*#' || true; }
 bad()  { fail=$((fail+1)); printf '  ❌ %s\n' "$*"; }
 
 # ── Dateien finden (ohne .git, ohne Fremdcode) ──
@@ -96,6 +96,24 @@ if [ -n "$hits" ]; then
   bad "Fester Pfad unter /tmp — mktemp verwenden oder direkt ans Ziel schreiben:"
   echo "$hits" | sed 's/^/       /'
 else note "✅ keine vorhersagbaren /tmp-Pfade"; fi
+
+# 6) `cmd | grep -q` in einem Skript mit pipefail (Fund vom 2026-08-22).
+#    grep -q schliesst die Pipe beim ersten Treffer, der Schreiber bekommt
+#    SIGPIPE, pipefail macht daraus einen Fehlschlag — die Bedingung wird also
+#    genau dann falsch, WENN es einen Treffer gibt. Sichtbar erst, wenn die
+#    Ausgabe den Pipe-Puffer (~64 KB) uebersteigt: in kleinen Tests gruen, in
+#    der Praxis falsch. `ps ax` reichte dafuer aus.
+hits=""
+for f in "${sh_files[@]}"; do
+  grep -q "set -.*pipefail" "$f" 2>/dev/null || continue
+  h=$(grep -nE '\| *grep -q' "$f" 2>/dev/null | no_comments)
+  [ -n "$h" ] && hits="$hits$f: $h"$'\n'
+done
+if [ -n "$hits" ]; then
+  bad "\`| grep -q\` in einem pipefail-Skript — bei grosser Ausgabe kippt die Bedingung ins Gegenteil:"
+  printf '%s' "$hits" | sed 's/^/       /'
+  note "Abhilfe: -q weglassen und nach /dev/null umleiten, oder pgrep verwenden."
+else note "✅ kein \`| grep -q\` unter pipefail"; fi
 
 echo ""
 echo "── Release-Hygiene ──"

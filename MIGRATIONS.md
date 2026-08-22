@@ -6,6 +6,32 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.22.0
+
+**A pipeline bug that inverted conditions, plus two installer fixes.**
+
+`cmd | grep -q pattern` inside a script with `set -o pipefail` is wrong, and
+wrong in the worst way: `grep -q` closes the pipe on the first match, the
+writer takes SIGPIPE, and pipefail turns that into a failed pipeline. The
+condition therefore becomes false **precisely when there is a match**. It only
+shows up once the output exceeds the pipe buffer (~64 KB), so it passes every
+small test and fails in production. `ps ax` on a normal machine is enough.
+
+It was making `agent-mesh report` claim "watcher nicht aktiv" while the
+watcher was running. Eight more occurrences were found and fixed across the
+tree — the LLM-reply check in autofix, the launchd lookup, the tag lookup, the
+responder question detection, and the SSH check in install.sh. The CI gate now
+rejects the pattern.
+
+Two installer fixes:
+
+- Agent names got a trailing hyphen, because `tr -c` converts the newline too
+  (`macbookpro-m4-fritz-box-`). Existing names are untouched; rename by
+  editing `AGENT_NAME` in your conf and running `agent-mesh sync`.
+- `install.sh` downloaded a stale file list: `dashboard.js`, `autofix.sh` and
+  `govern.sh` were missing, so freshly installed agents lacked modules that
+  updated agents had.
+
 ## v1.21.0
 
 **New: `agent-mesh report`.**

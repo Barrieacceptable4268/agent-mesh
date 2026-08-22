@@ -68,10 +68,10 @@ cmd_respond() {
     local lower
     lower=$(echo "$text" | tr '[:upper:]' '[:lower:]')
     local is_question=0
-    echo "$text" | grep -q "?" && is_question=1
-    echo "$lower" | grep -qE "bitte|update|mach|schick|antworte|wünsche|verbesserung|wie geht" && is_question=1
+    echo "$text" | grep "?" >/dev/null && is_question=1
+    echo "$lower" | grep -E "bitte|update|mach|schick|antworte|wünsche|verbesserung|wie geht" >/dev/null && is_question=1
     # Reine Bestätigungen (kurz, ohne Frage/Auftrag) ignorieren
-    echo "$lower" | grep -qE "^(update-ok|ok|done|ready|erledigt|verstanden|✅|🙏)" && is_question=0
+    echo "$lower" | grep -E "^(update-ok|ok|done|ready|erledigt|verstanden|✅|🙏)" >/dev/null && is_question=0
     if [ "$is_question" = "0" ]; then
       touch "$f.responded"
       continue
