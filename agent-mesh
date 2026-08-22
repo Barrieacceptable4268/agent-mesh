@@ -166,69 +166,78 @@ PYEOF
 }
 
 # ─────────────────────────── vault (sops + age) ───────────────────────────
-vault_file() { echo "$MEMORIES_DIR/vault/secrets.yaml"; }
+# Security v1.1 (2026-08-22): JEDES Secret ist eine eigene sops-Datei mit
+# SELEKTIVEN Empfängern (Least Privilege). Kein Broadcast mehr!
+#   vault/secrets/<key>.yaml   — nur die in --for genannten Agents lesen
+#   vault/keys/<agent>.age.pub — Public-Keys (Empfänger-Registry)
 
-vault_recipients() {
-  # Alle registrierten Public-Keys (bech32, sops akzeptiert sie direkt ohne age:-Prefix)
-  local keys=()
-  for k in "$MEMORIES_DIR"/vault/keys/*.pub; do
-    [ -f "$k" ] && keys+=("$(cat "$k")")
+vault_dir() { echo "$MEMORIES_DIR/vault/secrets"; }
+vault_file() { echo "$(vault_dir)/$1.yaml"; }
+
+# Public-Key eines Agents lesen (aus der Registry)
+agent_pub() {
+  local f="$MEMORIES_DIR/vault/keys/$1.age.pub"
+  [ -f "$f" ] && cat "$f" || die "Kein Public-Key für Agent '$1' registriert (vault/keys/$1.age.pub fehlt — Agent muss erst sync'en)"
+}
+
+# Empfänger-Liste bauen: --for agent1,agent2 → kommagetrennte bech32-Keys
+recipients_for() {
+  # $1 = kommagetrennte Agent-Namen; Leer = nur der eigene Key
+  local agents="${1:-$AGENT_NAME}"
+  local keys=() name
+  IFS=',' read -ra names <<< "$agents"
+  for name in "${names[@]}"; do
+    name=$(echo "$name" | xargs)  # trim
+    [ -n "$name" ] || continue
+    keys+=("$(agent_pub "$name")")
   done
-  [ ${#keys[@]} -gt 0 ] || die "Keine Agent-Keys in vault/keys/ registriert"
+  [ ${#keys[@]} -gt 0 ] || die "Keine gültigen Empfänger angegeben"
   printf '%s,' "${keys[@]}" | sed 's/,$//'
 }
 
 cmd_vault_set() {
   load_conf
-  [ $# -ge 2 ] || die "Usage: mesh vault set <key> <value>"
-  local key="$1"; shift
-  local value="$*"
-  local vf; vf=$(vault_file)
-  mkdir -p "$(dirname "$vf")"
+  # Syntax: vault set <key> <value> [--for agent1,agent2]
+  local key="" value="" for_agents=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --for) for_agents="$2"; shift 2 ;;
+      *) if [ -z "$key" ]; then key="$1"; else value="${value:+$value }$1"; fi; shift ;;
+    esac
+  done
+  [ -n "$key" ] && [ -n "$value" ] || die "Usage: agent-mesh vault set <key> <value> [--for agent1,agent2]"
+  mkdir -p "$(vault_dir)"
+  local vf; vf=$(vault_file "$key")
 
-  # Bestehende Datei laden oder neu anlegen
-  local tmp
-  tmp=$(mktemp)
-  if [ -f "$vf" ]; then
-    SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops -d "$vf" 2>/dev/null > "$tmp" \
-      || echo "{}" > "$tmp"
-  else
-    echo "{}" > "$tmp"
-  fi
-
-  # Wert setzen (python für sicheres JSON-Handling)
+  # Wert als JSON ablegen
+  local tmp; tmp=$(mktemp)
   python3 - "$tmp" "$key" "$value" << 'EOF'
 import json, sys
 path, key, value = sys.argv[1], sys.argv[2], sys.argv[3]
-try:
-    with open(path) as f: data = json.load(f)
-except Exception:
-    data = {}
-data[key] = value
-with open(path, "w") as f: json.dump(data, f, indent=2)
+with open(path, "w") as f: json.dump({key: value}, f, indent=2)
 EOF
 
-  # Mit allen Agent-Keys verschlüsseln
+  # Mit NUR den angegebenen Empfängern verschlüsseln (Least Privilege!)
   SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops --encrypt \
-    --age "$(vault_recipients)" \
+    --age "$(recipients_for "$for_agents")" \
     --input-type json --output-type yaml \
     "$tmp" > "$vf" 2>/dev/null || die "Verschlüsselung fehlgeschlagen"
   rm -f "$tmp"
 
-  cd "$MEMORIES_DIR" && git add vault/secrets.yaml vault/keys/ 2>/dev/null
-  git commit -m "vault: $key (via $AGENT_NAME)" 2>/dev/null || true
+  cd "$MEMORIES_DIR" && git add "vault/secrets/$key.yaml" vault/keys/ 2>/dev/null
+  git commit -m "vault: $key (via $AGENT_NAME, für: ${for_agents:-nur $AGENT_NAME})" 2>/dev/null || true
   git push origin HEAD 2>/dev/null || true
-  info "✅ Secret '$key' verschlüsselt abgelegt (empfänger: alle Agent-Keys)"
+  info "✅ Secret '$key' verschlüsselt (Empfänger: ${for_agents:-nur $AGENT_NAME})"
 }
 
 cmd_vault_get() {
   load_conf
-  [ $# -ge 1 ] || die "Usage: mesh vault get <key>"
-  local vf; vf=$(vault_file)
-  [ -f "$vf" ] || die "Vault existiert noch nicht"
+  [ $# -ge 1 ] || die "Usage: agent-mesh vault get <key>"
+  local vf; vf=$(vault_file "$1")
+  [ -f "$vf" ] || die "Secret '$1' existiert nicht"
   local tmp; tmp=$(mktemp)
   SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops -d --output-type json "$vf" > "$tmp" 2>/dev/null \
-    || die "Entschlüsselung fehlgeschlagen (eigener Key nicht im Empfänger-Set?)"
+    || die "Entschlüsselung fehlgeschlagen (dein Key ist kein Empfänger dieses Secrets)"
   python3 - "$tmp" "$1" << 'EOF'
 import json, sys
 with open(sys.argv[1]) as f: data = json.load(f)
@@ -239,28 +248,114 @@ EOF
 
 cmd_vault_list() {
   load_conf
-  local vf; vf=$(vault_file)
-  [ -f "$vf" ] || { info "Vault ist leer."; return; }
-  local tmp; tmp=$(mktemp)
-  SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops -d --output-type json "$vf" > "$tmp" 2>/dev/null || die "Entschlüsselung fehlgeschlagen"
-  python3 - "$tmp" << 'EOF'
-import json, sys
-with open(sys.argv[1]) as f: data = json.load(f)
-for k in data: print(f"  {k}")
-EOF
-  rm -f "$tmp"
+  local d; d=$(vault_dir)
+  [ -d "$d" ] || { info "Vault ist leer."; return; }
+  local any=0
+  for f in "$d"/*.yaml; do
+    [ -f "$f" ] || continue
+    any=1
+    local name; name=$(basename "$f" .yaml)
+    # Prüfen ob der eigene Key lesen kann (ohne Wert anzuzeigen)
+    if SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops -d --output-type json "$f" >/dev/null 2>&1; then
+      echo "  🔓 $name (lesbar)"
+    else
+      echo "  🔒 $name (kein Zugriff)"
+    fi
+  done
+  [ "$any" = "0" ] && info "Vault ist leer."
 }
 
 cmd_vault_add_key() {
   load_conf
-  [ $# -ge 1 ] || die "Usage: mesh vault add-key <agent-name>"
+  [ $# -ge 1 ] || die "Usage: agent-mesh vault add-key <agent-name>"
   local agent="$1" pub
-  pub=$(cat "$AGENT_MESH_HOME/keys/$agent.age" 2>/dev/null | age-keygen -y 2>/dev/null) \
+  pub=$(age-keygen -y "$AGENT_MESH_HOME/keys/$agent.age" 2>/dev/null) \
     || die "Key für '$agent' nicht gefunden: $AGENT_MESH_HOME/keys/$agent.age"
-  # Hinweis: andere Agents müssen ihren Key selbst einspielen — Public-Keys
-  # liegen im Repo unter vault/keys/. Zum Neuvorstellen: pub aus Repo lesen
-  info "Key-Handling: Public-Keys werden über das Repo geteilt (vault/keys/)."
-  info "Wenn '$agent' dort registriert ist, wird er bei vault set automatisch Empfänger."
+  # Public-Key in die Registry legen (damit andere ihn als Empfänger nutzen können)
+  mkdir -p "$MEMORIES_DIR/vault/keys"
+  echo "$pub" > "$MEMORIES_DIR/vault/keys/$agent.age.pub"
+  cd "$MEMORIES_DIR" && git add "vault/keys/$agent.age.pub" >/dev/null 2>&1
+  git commit -m "vault: Public-Key für $agent registriert" >/dev/null 2>&1
+  git push origin HEAD >/dev/null 2>&1 || true
+  info "✅ Public-Key für '$agent' registriert — andere Agents können ihn via --for adressieren."
+}
+
+# ── Security v1.1: Key-Revocation ──
+# Entfernt einen Agent aus der Vault-Registry UND verschlüsselt ALLE Secrets
+# neu OHNE dessen Key. Danach kann der entfernte Agent nichts mehr lesen.
+cmd_vault_revoke() {
+  load_conf
+  [ $# -ge 1 ] || die "Usage: agent-mesh vault revoke <agent-name>"
+  local agent="$1"
+  local pub_file="$MEMORIES_DIR/vault/keys/$agent.age.pub"
+  [ -f "$pub_file" ] || die "Kein Public-Key für '$agent' registriert"
+
+  # Security v1.1 HÄRTUNG: Der Hub (Rolle=hub) darf NICHT still revoken —
+  # doppelte Bestätigung + Warnung, wer da gerade entfernt wird!
+  local myrole
+  myrole=$(get_card | python3 -c "import json,sys; print(json.load(sys.stdin).get('role','worker'))" 2>/dev/null || echo "worker")
+  if [ "$agent" = "$AGENT_NAME" ]; then
+    die "❌ Du kannst dich nicht selbst widerrufen! (Rolle: $myrole)"
+  fi
+
+  # Sicherheitsabfrage (destruktiv!) — ZWEI Bestätigungen nötig
+  echo "⚠️  Agent '$agent' wird aus dem Vault entfernt:"
+  echo "    - Public-Key gelöscht (vault/keys/$agent.age.pub)"
+  echo "    - ALLE Secrets neu verschlüsselt OHNE $agent"
+  echo "    - $agent kann danach KEINE Secrets mehr lesen"
+  read -r -p "👉 Wirklich fortfahren? (ja/nein) " answer
+  case "${answer,,}" in
+    j|ja|y|yes) ;;
+    *) die "Abgebrochen." ;;
+  esac
+  read -r -p "👉 ENDGÜLTIG? Agent '$agent' unwiderruflich entfernen? (entfernen) " answer2
+  [ "${answer2,,}" = "entfernen" ] || die "Abgebrochen (Bestätigung war nicht 'entfernen')."
+
+  # 1. Alle Secrets entschlüsseln (eigener Key muss Empfänger sein)
+  local d; d=$(vault_dir)
+  local tmpdir; tmpdir=$(mktemp -d)
+  local count=0
+  for f in "$d"/*.yaml; do
+    [ -f "$f" ] || continue
+    local name; name=$(basename "$f" .yaml)
+    if ! SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops -d --output-type json "$f" > "$tmpdir/$name.json" 2>/dev/null; then
+      warn "  ⚠️  Secret '$name': nicht entschlüsselbar mit eigenem Key — übersprungen (bleibt wie es ist)"
+      continue
+    fi
+    count=$((count+1))
+  done
+  [ "$count" -gt 0 ] || info "Keine entschlüsselbaren Secrets gefunden."
+
+  # 2. Key entfernen
+  rm -f "$pub_file"
+
+  # 3. Alle Secrets neu verschlüsseln (ohne den entfernten Key)
+  local remaining
+  remaining=$(recipients_for "" )  # alle verbliebenen Keys (der eigene + andere)
+  for json in "$tmpdir"/*.json; do
+    [ -f "$json" ] || continue
+    local name; name=$(basename "$json" .json)
+    # Empfänger neu bestimmen: alle verbliebenen KEYS AUSSER dem entfernten
+    # → recipients_for ohne den entfernten Agent (der Key ist ja gelöscht → automatisch raus)
+    local recipients=""
+    local keys=()
+    for k in "$MEMORIES_DIR"/vault/keys/*.pub; do
+      [ -f "$k" ] && keys+=("$(cat "$k")")
+    done
+    [ ${#keys[@]} -gt 0 ] || die "Keine verbliebenen Keys — Vault kann nicht neu verschlüsselt werden"
+    recipients=$(printf '%s,' "${keys[@]}" | sed 's/,$//')
+
+    SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops --encrypt \
+      --age "$recipients" --input-type json --output-type yaml \
+      "$json" > "$d/$name.yaml" 2>/dev/null || die "Re-Encrypt von '$name' fehlgeschlagen"
+    info "  ✓ $name neu verschlüsselt (ohne $agent)"
+  done
+  rm -rf "$tmpdir"
+
+  cd "$MEMORIES_DIR" && git add "vault/keys/" "vault/secrets/" >/dev/null 2>&1
+  git commit -m "vault: REVOKE $agent — Keys entfernt, alle Secrets re-encrypted" >/dev/null 2>&1
+  git push origin HEAD >/dev/null 2>&1 || true
+  info "✅ Agent '$agent' widerrufen — kann keine Secrets mehr lesen."
 }
 
 # ─────────────────────────── insight ───────────────────────────
@@ -319,7 +414,8 @@ case "${1:-}" in
              get) cmd_vault_get "$@" ;;
              list) cmd_vault_list ;;
              add-key) cmd_vault_add_key "$@" ;;
-             *) die "vault: {set|get|list|add-key}" ;;
+             revoke) cmd_vault_revoke "$@" ;;
+             *) die "vault: {set|get|list|add-key|revoke}" ;;
            esac ;;
   insight) shift; cmd_insight "$@" ;;
   watch)   shift; cmd_watch "$@" ;;

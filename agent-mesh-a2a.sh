@@ -58,21 +58,48 @@ PYEOF
   fi
 }
 
-# ─────────────────────────── Mailbox (Git-Queue) ───────────────────────────
+# ─────────────────────────── Mailbox (Git-Queue, VERSCHLÜSSELT) ───────────────────────────
+# Security v1.1: Jede Nachricht wird mit dem Public-Key des EMPFÄNGERS
+# verschlüsselt (sops). Nur Sender + Empfänger können sie lesen.
+#   messages/<empfaenger>/<id>.json   ← Klartext-Header (Metadaten: from/to/ts)
+#   messages/<empfaenger>/<id>.json.enc  ← sops-verschlüsselter Text (nur Empfänger lesbar)
+
 next_msg_id() {
   # Monotone ID: timestamp + kurzer Zufall (Kollisionen unwahrscheinlich)
   echo "$(date -u +%Y%m%d%H%M%S)-$RANDOM"
 }
 
 msg_file() { echo "$MESSAGES_DIR/$1/$2.json"; }
+msg_enc() { echo "${1}.enc"; }
+
+# Verschlüsselten Text erzeugen (JSON-Objekt mit "text" — sops-verschlüsselt)
+encrypt_text() {
+  # $1 = Empfänger-Key (bech32), $2 = Klartext
+  local recipient="$1" text="$2" tmp
+  tmp=$(mktemp)
+  python3 - "$tmp" "$text" << 'EOF'
+import json, sys
+with open(sys.argv[1], "w") as f: json.dump({"text": sys.argv[2]}, f)
+EOF
+  SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops --encrypt \
+    --age "$recipient" --input-type json --output-type yaml "$tmp" 2>/dev/null \
+    || die "Verschlüsselung fehlgeschlagen"
+  rm -f "$tmp"
+}
 
 cmd_send() {
   load_conf
-  [ $# -ge 2 ] || die "Usage: mesh send <empfaenger> <text>"
+  [ $# -ge 2 ] || die "Usage: agent-mesh send <empfaenger> <text>"
   local to="$1"; shift
   local text="$*"
   local id; id=$(next_msg_id)
   mkdir -p "$MESSAGES_DIR/$to"
+
+  # Empfänger-Key laden (muss registriert sein!)
+  local to_pub; to_pub=$(agent_pub "$to")
+
+  # Verschlüsselten Text erzeugen (nur Empfänger kann lesen)
+  local enc; enc=$(encrypt_text "$to_pub" "$text")
   local f; f=$(msg_file "$to" "$id")
   cat > "$f" << EOF
 {
@@ -80,20 +107,23 @@ cmd_send() {
   "from": "$AGENT_NAME",
   "to": "$to",
   "type": "message",
-  "text": $(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$text"),
+  "encrypted": true,
   "ts": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "reply_to": null
 }
 EOF
-  cd "$MEMORIES_DIR" && git add "messages/$to/$id.json" >/dev/null 2>&1
-  git commit -m "msg: $AGENT_NAME → $to" >/dev/null 2>&1
+  # Verschlüsselten Text als separate Datei ablegen
+  echo "$enc" > "$(msg_enc "$f")"
+
+  cd "$MEMORIES_DIR" && git add "messages/$to/$id.json" "messages/$to/$id.json.enc" >/dev/null 2>&1
+  git commit -m "msg: $AGENT_NAME → $to (verschlüsselt)" >/dev/null 2>&1
   git push origin HEAD >/dev/null 2>&1 || info "Push fehlgeschlagen (Remote prüfen)"
-  info "✅ Nachricht an '$to' gesendet (ID: $id)"
+  info "✅ Verschlüsselte Nachricht an '$to' gesendet (ID: $id)"
 }
 
 cmd_reply() {
   load_conf
-  [ $# -ge 2 ] || die "Usage: mesh reply <msg-id> <text>"
+  [ $# -ge 2 ] || die "Usage: agent-mesh reply <msg-id> <text>"
   local reply_to="$1"; shift
   local text="$*"
   # Original finden (in welcher Mailbox liegt die msg-id?)
@@ -104,6 +134,10 @@ cmd_reply() {
   from=$(python3 -c "import json; print(json.load(open('$orig'))['from'])")
   local id; id=$(next_msg_id)
   mkdir -p "$MESSAGES_DIR/$from"
+
+  # Empfänger-Key laden + verschlüsseln
+  local to_pub; to_pub=$(agent_pub "$from")
+  local enc; enc=$(encrypt_text "$to_pub" "$text")
   local f; f=$(msg_file "$from" "$id")
   cat > "$f" << EOF
 {
@@ -111,15 +145,17 @@ cmd_reply() {
   "from": "$AGENT_NAME",
   "to": "$from",
   "type": "message",
-  "text": $(python3 -c "import json,sys; print(json.dumps(sys.argv[1]))" "$text"),
+  "encrypted": true,
   "ts": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
   "reply_to": "$reply_to"
 }
 EOF
-  cd "$MEMORIES_DIR" && git add "messages/$from/$id.json" >/dev/null 2>&1
-  git commit -m "reply: $AGENT_NAME → $from ($reply_to)" >/dev/null 2>&1
+  echo "$enc" > "$(msg_enc "$f")"
+
+  cd "$MEMORIES_DIR" && git add "messages/$from/$id.json" "messages/$from/$id.json.enc" >/dev/null 2>&1
+  git commit -m "reply: $AGENT_NAME → $from ($reply_to, verschlüsselt)" >/dev/null 2>&1
   git push origin HEAD >/dev/null 2>&1 || info "Push fehlgeschlagen"
-  info "✅ Antwort an '$from' gesendet (ID: $id)"
+  info "✅ Verschlüsselte Antwort an '$from' gesendet (ID: $id)"
 }
 
 cmd_inbox() {
@@ -129,16 +165,39 @@ cmd_inbox() {
   local any=0
   for f in "$dir"/*.json; do
     [ -f "$f" ] || continue
+    [ "$(basename "$f")" = "*.enc" ] && continue
+    # Nur .json (nicht .enc) verarbeiten
+    case "$f" in *.enc) continue;; esac
     any=1
-    python3 - "$f" << 'PYEOF'
-import json, sys
-m = json.load(open(sys.argv[1]))
+    python3 - "$f" "$f.enc" "$AGE_KEY_FILE" << 'PYEOF'
+import json, os, subprocess, sys
+meta_path, enc_path, keyfile = sys.argv[1], sys.argv[2], sys.argv[3]
+try:
+    m = json.load(open(meta_path))
+except Exception:
+    sys.exit(0)
 print(f"── {m['id']} ──")
 print(f"  von: {m['from']}  ·  {m['ts']}")
 print(f"  an:  {m['to']}")
 if m.get("reply_to"): print(f"  antwort auf: {m['reply_to']}")
-print(f"  text: {m['text']}")
-print(f"  (Antwort: mesh reply {m['id']} <text>)")
+# Verschlüsselten Text entschlüsseln (eigener Key)
+if m.get("encrypted") and os.path.exists(enc_path):
+    env = dict(os.environ, SOPS_AGE_KEY_FILE=keyfile)
+    try:
+        out = subprocess.run(
+            ["sops", "-d", "--input-type", "yaml", "--output-type", "json", enc_path],
+            capture_output=True, text=True, env=env, timeout=15,
+        )
+        if out.returncode == 0:
+            text = json.loads(out.stdout).get("text", "")
+            print(f"  text: {text}")
+        else:
+            print(f"  text: 🔒 verschlüsselt (dein Key ist kein Empfänger)")
+    except Exception:
+        print(f"  text: 🔒 verschlüsselt (Entschlüsselung fehlgeschlagen)")
+else:
+    print(f"  text: {m.get('text', '(kein Text)')}")
+print(f"  (Antwort: agent-mesh reply {m['id']} <text>)")
 PYEOF
   done
   [ "$any" = "0" ] && info "Keine Nachrichten."
