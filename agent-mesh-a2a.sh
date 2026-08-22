@@ -164,8 +164,24 @@ EOF
   info "✅ Verschlüsselte Antwort an '$from' gesendet (ID: $id)"
 }
 
-cmd_inbox() {
+# ── Broadcast: Nachricht an ALLE registrierten Agents (verschlüsselt) ──
+cmd_broadcast() {
   load_conf
+  [ $# -ge 1 ] || die "Usage: agent-mesh broadcast <text>"
+  local text="$*"
+  local sent=0
+  for k in "$MEMORIES_DIR"/vault/keys/*.pub; do
+    [ -f "$k" ] || continue
+    local to; to=$(basename "$k" .age.pub)
+    [ "$to" = "$AGENT_NAME" ] && continue  # nicht an sich selbst
+    cmd_send "$to" "$text"
+    sent=$((sent+1))
+  done
+  [ "$sent" -gt 0 ] || info "Keine anderen Agents registriert."
+  info "📢 Broadcast an $sent Agent(s) gesendet."
+}
+
+cmd_inbox() {  load_conf
   local dir="$MESSAGES_DIR/$AGENT_NAME"
   [ -d "$dir" ] || { info "Keine Nachrichten."; return; }
   local any=0
