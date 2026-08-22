@@ -2,7 +2,7 @@
 /**
  * agent-mesh-dashboard — zentrale Übersicht für alle Mesh-User.
  *
- * Eine URL (dashboard.moinsen.dev), sicherer Login (Passwort), Live-Daten:
+ * Eine URL (mesh-console.moinsen.dev), sicherer Login (Passwort), Live-Daten:
  *   - Agents (vom Relay: online/offline, Version)
  *   - Vault-Status (Secrets, Empfänger)
  *   - Offene Issues (GitHub)
@@ -12,7 +12,7 @@
  * Sicherheit:
  *   - Session-Cookie (HttpOnly) + Passwort-Hash (scrypt)
  *   - Nur lesend — keine Schreib-APIs
- *   - Läuft nur auf 127.0.0.1 hinter Cloudflare-Tunnel (dashboard.moinsen.dev)
+ *   - Läuft nur auf 127.0.0.1 hinter Cloudflare-Tunnel (mesh-console.moinsen.dev)
  *   - Keine Secrets im Browser (Token bleibt auf dem Server)
  */
 
