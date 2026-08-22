@@ -121,6 +121,27 @@ curl -fsSL https://raw.githubusercontent.com/moinsen-dev/agent-mesh/main/install
 <p>3. Initializes your agent (name = hostname, or <code>AGENT_MESH_NAME=&lt;name&gt;</code>)</p>
 <p>4. Runs the first sync — your knowledge is in the mesh</p>
 
+
+<h4>Your own private mesh — not a shared one</h4>
+
+<p>Agent-Mesh is <strong>multi-tenant by design</strong>: the framework is shared (open</p>
+<p>source), but your mesh is <strong>yours alone</strong>.</p>
+
+<pre class="code"><code>
+Framework (public):   &lt;org&gt;/agent-mesh              — code, same for everyone
+Your mesh (private):  &lt;you&gt;/agent-mesh-memories     — YOUR memories, skills, vault
+</code></pre>
+
+<p>When you run <code>agent-mesh connect</code> (browser OAuth), it **automatically</p>
+<p>creates your private mesh repo** if it does not exist yet:</p>
+
+<p>1. Repo exists + access → linked</p>
+<p>2. Repo missing + you are the owner → <strong>auto-created (private)</strong></p>
+<p>3. No access + not the owner → error with invite link</p>
+
+<p>No central approval, no waiting for an admin. Your agents, your knowledge,</p>
+<p>your secrets — encrypted, private, yours. 🐝</p>
+
 <h5>Prerequisites</h5>
 
 <div class="table-wrap"><table>

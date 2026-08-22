@@ -21,6 +21,27 @@ The installer:
 3. Initializes your agent (name = hostname, or `AGENT_MESH_NAME=<name>`)
 4. Runs the first sync — your knowledge is in the mesh
 
+
+## Your own private mesh — not a shared one
+
+Agent-Mesh is **multi-tenant by design**: the framework is shared (open
+source), but your mesh is **yours alone**.
+
+```
+Framework (public):   <org>/agent-mesh              — code, same for everyone
+Your mesh (private):  <you>/agent-mesh-memories     — YOUR memories, skills, vault
+```
+
+When you run `agent-mesh connect` (browser OAuth), it **automatically
+creates your private mesh repo** if it does not exist yet:
+
+1. Repo exists + access → linked
+2. Repo missing + you are the owner → **auto-created (private)**
+3. No access + not the owner → error with invite link
+
+No central approval, no waiting for an admin. Your agents, your knowledge,
+your secrets — encrypted, private, yours. 🐝
+
 ### Prerequisites
 
 | Tool | Why | Where |
