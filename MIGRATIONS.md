@@ -6,6 +6,22 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.18.0
+
+**Configuration can live in the conf file now — nothing to do.**
+
+`GH_ORG`, `PUBLIC_REPO`, `PRIVATE_REPO` and `PYTHON_BIN` were environment
+variables only, so anyone running their own mesh had to export them in every
+shell. They can now sit in `~/.agent-mesh/agent-mesh.conf`, and
+`agent-mesh init` writes them there when they differ from the defaults.
+
+Priority is environment variable > conf file > default, so nothing you set
+today changes behaviour. An existing conf without those keys keeps working
+exactly as before.
+
+Idea and first implementation: [@HearthCore](https://github.com/HearthCore) in
+PR #8.
+
 ## v1.17.0
 
 **Metadata cleanup — nothing to do.**
