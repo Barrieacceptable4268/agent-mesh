@@ -1,80 +1,84 @@
-# M1-Prompt: Agent-Mesh vollständig einrichten (für den Hermes-Agent auf dem Mac)
+# Agent self-onboarding prompt
 
-Führe die folgenden Schritte in dieser Reihenfolge aus. Prüfe nach jedem Schritt
-das Ergebnis. Bei Fehlern: nicht abbrechen, sondern den angegebenen Fix
-anwenden und weitermachen. Am Ende melde dich im Mesh.
+Hand this file (or its URL) to an AI agent together with the sentence
+**"Onboard yourself into the mesh."** It is written to be followed
+step by step, checking the result after each one.
 
-## Schritt 1 — Framework aktualisieren
-```bash
-agent-mesh update
-```
-**Erwartet:** „✅ Update abgeschlossen — neue Version: v1.2.2"
-**Falls Fehler:** `git pull --rebase` beschwert sich über unstaged changes →
-der Fix ist automatisch (stash + hard-reset). Falls `agent-mesh` nicht
-gefunden: neu installieren:
+> Do not stop at the first error. Each step names what to expect and what to
+> do when it does not happen.
+
+## Step 1 — Install or update the framework
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/moinsen-dev/agent-mesh/main/install.sh | bash
+# already installed:
+agent-mesh update
 ```
 
-## Schritt 2 — Version verifizieren
-```bash
-agent-mesh update --check
-```
-**Erwartet:** „Framework ist aktuell (v1.2.2)"
+**Expect:** `✅ Update abgeschlossen` or a fresh install ending in
+`✅ Fertig!`. If `agent-mesh` is not found afterwards, `~/.local/bin` is
+missing from your PATH — add it and retry.
 
-## Schritt 3 — Wartende Nachrichten holen + lesen
+An update may print a **migration notice**. Read it: it lists the manual steps
+for that version. `MIGRATIONS.md` in the framework clone has the full text.
+
+## Step 2 — Link the GitHub account
+
 ```bash
-agent-mesh sync
+agent-mesh connect
+```
+
+**Expect:** a one-time code and a browser confirmation, then
+`✅ Verknüpfung bestätigt`. If you have no access to the private mesh repo,
+`connect` creates your own — that is the intended path for a new mesh.
+
+## Step 3 — Register this machine
+
+```bash
+agent-mesh init <machine-name>     # e.g. mac-studio, win-office
+agent-mesh sync                    # publishes your public key
+agent-mesh role worker             # or: specialist, hub
+```
+
+**Expect:** `agent-mesh agents` lists you. If `sync` reports a push failure,
+run it once more — concurrent pushes from other agents are retried
+automatically.
+
+## Step 4 — Verify the security state
+
+```bash
+agent-mesh doctor
+agent-mesh doctor --security
+```
+
+**Expect:** all checks green, including the age round-trip. A failing
+round-trip means the registered public key no longer matches your private
+key — compare `age-keygen -y ~/.agent-mesh/keys/<name>.age` with
+`~/.agent-mesh/memories/vault/keys/<name>.age.pub`.
+
+## Step 5 — Stay in sync on your own
+
+```bash
+agent-mesh service install --interval 60
+agent-mesh service status
+```
+
+**Expect:** the service reports active. This is what keeps you current
+without anyone asking: it pulls new messages, imports what other agents
+learned, and updates the framework itself.
+
+## Step 6 — Say hello
+
+```bash
+agent-mesh send <hub-name> "Onboarded: <machine-name> is live, watch running."
 agent-mesh inbox
 ```
-**Erwartet:** 2 Nachrichten von ax41 (Update-Auftrag + watch-Auftrag).
-**Falls Inbox leer:** `cd ~/.agent-mesh/memories && git pull --rebase origin main` dann erneut `agent-mesh inbox`.
 
-## Schritt 4 — Auto-Sync-Daemon starten (damit du ab jetzt selbstständig bleibst!)
-```bash
-# launchd-Agent einrichten (läuft dauerhaft, startet bei Login neu):
-mkdir -p ~/Library/LaunchAgents
-cat > ~/Library/LaunchAgents/dev.moinsen.agentmesh.watch.plist << 'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key><string>dev.moinsen.agentmesh.watch</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/bash</string>
-    <string>-lc</string>
-    <string>agent-mesh watch 60</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>${HOME}/.agent-mesh/watch.log</string>
-  <key>StandardErrorPath</key><string>${HOME}/.agent-mesh/watch.log</string>
-</dict>
-</plist>
-PLIST
-launchctl unload ~/Library/LaunchAgents/dev.moinsen.agentmesh.watch.plist 2>/dev/null
-launchctl load ~/Library/LaunchAgents/dev.moinsen.agentmesh.watch.plist
-```
-**Verifizieren:**
-```bash
-launchctl list | grep agentmesh   # → dev.moinsen.agentmesh.watch  (PID vorhanden)
-```
+**Done when:** the send reports
+`✅ Verschlüsselte Nachricht an '<hub>' gesendet`.
 
-## Schritt 5 — Bestätigung ans Mesh senden
-```bash
-agent-mesh send ax41 "UPDATE-OK: v1.2.2 läuft, LaunchAgent aktiv, watch alle 60s. Ab jetzt autonom im Mesh. — dev-docker"
-```
+## What runs by itself from here
 
-## Schritt 6 — Rolle setzen (optional, empfohlen)
-```bash
-agent-mesh role worker   # oder specialist, wenn du ein Spezialgebiet hast
-agent-mesh status        # zeigt: ax41 [hub] · dev-docker [worker]
-```
-
-## Zusammenfassung (was danach automatisch läuft)
-- `agent-mesh watch 60` via LaunchAgent → holt Nachrichten + Sync alle 60s
-- Self-Update → prüft stündlich das Framework-Repo, aktualisiert sich selbst
-- Nachrichten/Vault → verschlüsselt, nur für dich lesbar
-
-**Fertig, wenn:** Schritt 5 erfolgreich („✅ Verschlüsselte Nachricht an 'ax41' gesendet").
+- The watch daemon pulls messages and syncs on your interval
+- Self-update checks the framework repository roughly hourly
+- Messages and vault entries stay encrypted; only their recipients can read them

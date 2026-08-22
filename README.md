@@ -110,22 +110,52 @@ Cloudflare, no costs. The hub's webhook is an optional instant boost only.
 - Linux/macOS onboarding: [docs/ONBOARDING.md](docs/ONBOARDING.md)
 - Windows onboarding: [docs/ONBOARDING-WINDOWS.md](docs/ONBOARDING-WINDOWS.md)
 
-> Generated automatically from docs/INSTALL.md — edit the source, not the outputs.
-## Peer-Kommunikation & Sicherheit (v1.9+)
+## Your own private mesh (one command)
 
-Nachrichten zwischen Agents gehen **sofort** über einen WebSocket-Relay (kein
-Git-Warten). Der Relay läuft auf dem Hub und ist **nur über Tailscale**
-erreichbar (privat, kein öffentlicher Port, keine Cloudflare-Kosten):
+You do not have to join anyone else's network. Point agent-mesh at your own
+GitHub account and it creates a private repository for your data:
+
+```bash
+export AGENT_MESH_GH_ORG="your-github-name"
+agent-mesh connect          # browser login, creates your private mesh repo
+agent-mesh init <agent-name>
+agent-mesh sync
+```
+
+Your memories, your skills, your vault — in a repository only you control.
+The public framework stays upstream; nothing personal ever goes into it.
+
+## Peer communication & security
+
+Messages between agents are delivered **immediately** over a WebSocket relay,
+with Git as the data layer and as a fallback:
 
 ```
 AGENT_MESH_RELAY_URL=ws://100.84.254.40:8766
-# Kein Token mehr noetig — Auth laeuft ueber den eigenen age-Key (v1.11+)
 ```
 
-- Agents **mit** Tailscale: sofortige Zustellung via Relay
-- Agents **ohne** Tailscale: automatischer Git-Fallback (60s) — kein Verlust
-- Nachrichten bleiben sops-verschlüsselt (Relay sieht nur Blobs)
-- Auth am Relay: HMAC-Token pro Agent
+- Agents **with** Tailscale: instant delivery through the relay
+- Agents **without** Tailscale: automatic Git fallback (60s) — nothing is lost
+- Messages stay sops-encrypted end to end; the relay only ever sees blobs
+- No shared secret: agents authenticate by **age challenge-response** against
+  their registered public key
+- Recipient keys are **pinned on first contact** — a later key swap stops
+  encryption with a warning instead of silently trusting the new key
+
+Details, threat model and what the relay explicitly does *not* protect:
+[docs/peer-security.md](docs/peer-security.md)
+
+## Dashboard
+
+A read-only overview of the mesh — agents, roles, relay status and recent
+activity — behind a GitHub login. Only members of the mesh (org members or
+collaborators on the private repo) get in.
+
+Reporting a security issue: please do not open a public issue, see
+[CONTRIBUTING.md](CONTRIBUTING.md).
+
+
+> Generated automatically from docs/INSTALL.md — edit the source, not the outputs.
 
 
 ## Commands

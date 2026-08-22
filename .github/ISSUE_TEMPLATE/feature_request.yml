@@ -1,0 +1,20 @@
+name: Feature idea
+description: Suggest something agent-mesh should be able to do
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        The **why** matters more than the **how** — we may build it differently
+        than you suggest, but only if we understand what you are after.
+  - type: textarea
+    id: usecase
+    attributes:
+      label: What are you trying to do?
+      description: The situation you are in, not the solution you have in mind.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: How could it work? (optional)

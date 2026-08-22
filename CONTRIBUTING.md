@@ -1,67 +1,68 @@
-# Mitwirken an agent-mesh
+# Contributing to agent-mesh
 
-Danke, dass du hier bist. Kurz und ehrlich vorweg:
+Thanks for being here. The short and honest version first:
 
-## Wir nehmen derzeit keine Pull Requests an
+## We are not accepting pull requests right now
 
-agent-mesh ist noch jung und bewegt sich schnell. Das Framework installiert
-sich per `curl | bash`, läuft als Dienst auf fremden Rechnern, hält private
-Schlüssel und aktualisiert sich stündlich selbst. Änderungen daran wandern
-also innerhalb einer Stunde auf jede Maschine im Mesh — auch auf deine.
+agent-mesh is young and moving fast. The framework installs itself with
+`curl | bash`, runs as a service on other people's machines, holds private
+keys, and updates itself every hour. That means a change merged here reaches
+every machine in the mesh within the hour — including yours.
 
-Bei diesem Zuschnitt können wir fremden Code im Moment nicht in der Tiefe
-prüfen, die er verdient. Einen PR halb zu reviewen wäre schlechter, als ihn
-gar nicht anzunehmen. Deshalb: **bitte keine Pull Requests.**
+At this stage we cannot review outside code to the depth it deserves. Half
+reviewing a pull request would be worse than not taking it at all. So please:
+**no pull requests for now.**
 
-## Was wir uns wünschen: Issues
+## What we would love instead: issues
 
-Ein gutes Issue ist uns mehr wert als ein PR — es sagt uns, wo es klemmt, und
-lässt uns die Lösung in den Gesamtzusammenhang stellen.
+A good issue is worth more to us than a patch. It tells us where things break
+and lets us fit the fix into the wider picture.
 
-**Fehler melden** → https://github.com/moinsen-dev/agent-mesh/issues/new
+**Report a bug** → https://github.com/moinsen-dev/agent-mesh/issues/new
 
-Hilfreich ist:
-- Betriebssystem und Shell (`uname -a`, `bash --version`)
-- Was du getan hast, was passiert ist, was du erwartet hast
-- Die Ausgabe von `agent-mesh doctor` — sie deckt die meisten Ursachen auf
-- Bei Update-Problemen: `agent-mesh update --check`
+Useful things to include:
 
-**Feature-Idee** → ebenfalls als Issue, gern mit dem Anwendungsfall dahinter.
-Das *Warum* ist wichtiger als das *Wie*: Wir bauen es vielleicht anders, als
-du es vorschlägst, aber nur, wenn wir verstehen, worum es dir geht.
+- Operating system and shell (`uname -a`, `bash --version`)
+- What you did, what happened, what you expected
+- The output of `agent-mesh doctor` — it explains most failures on its own
+- For update problems: `agent-mesh update --check`
 
-**Frage** → auch ein Issue. Wenn du etwas nicht findest, fehlt meistens die
-Dokumentation, nicht das Wissen.
+**Feature idea** → also an issue, ideally with the use case behind it. The
+*why* matters more than the *how*: we may build it differently than you
+suggest, but only if we understand what you are actually after.
 
-## Sicherheitslücken
+**Question** → an issue as well. If you could not find something, the
+documentation is usually what is missing, not your understanding.
 
-**Bitte nicht als öffentliches Issue.** Schreib an
-[developer@moinsen.dev](mailto:developer@moinsen.dev) oder nutze GitHub
-Security Advisories:
+## Security issues
+
+**Please do not open a public issue.** Email
+[developer@moinsen.dev](mailto:developer@moinsen.dev) or use GitHub Security
+Advisories:
 https://github.com/moinsen-dev/agent-mesh/security/advisories/new
 
-Wegen der Selbst-Update-Funktion trifft eine Lücke hier sofort jeden
-laufenden Agent. Wir reagieren entsprechend zügig und nennen dich auf Wunsch
-in den Release-Notes.
+Because of the self-update mechanism, a vulnerability here reaches every
+running agent immediately. We respond accordingly, and we will credit you in
+the release notes if you want us to.
 
-## Wenn du das Ding für dich umbauen willst
+## If you want to bend it to your own needs
 
-Nur zu — dafür ist es offen. Der saubere Weg ist ein **eigenes Mesh** statt
-eines PRs:
+Please do — that is what it is for. The clean path is **your own mesh**
+rather than a pull request:
 
 ```bash
-export AGENT_MESH_GH_ORG="dein-github-name"
-agent-mesh connect          # legt dein eigenes privates Mesh-Repo an
+export AGENT_MESH_GH_ORG="your-github-name"
+agent-mesh connect          # creates your own private mesh repo
 ```
 
-Dein Fork, deine Regeln, deine Daten. Wenn dabei etwas entsteht, das andere
-gebrauchen können: erzähl uns in einem Issue davon.
+Your fork, your rules, your data. If something useful comes out of it, tell
+us about it in an issue.
 
-## Wird sich das ändern?
+## Will this change?
 
-Ja. Sobald das Framework ruhiger läuft, es Tests gibt, die eine fremde
-Änderung tragen können, und die Sicherheits-Grundlagen sitzen, öffnen wir für
-PRs. Dann steht es hier — und wer bis dahin ein Issue beigetragen hat, ist die
-erste Adresse, die wir fragen.
+Yes. Once the framework settles down, once there are tests that can carry an
+outside change, and once the security groundwork is in place, we will open up
+for pull requests. It will say so here when we do — and whoever contributed
+issues in the meantime is the first person we will ask.
 
-Bis dahin: Issues sind willkommen, und sie werden gelesen.
+Until then: issues are welcome, and they get read.

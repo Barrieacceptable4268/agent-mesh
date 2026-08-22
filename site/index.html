@@ -74,7 +74,7 @@
               <stop offset="100%" stop-color="#48d597" stop-opacity="0"/>
             </radialGradient>
           </defs>
-          <!-- Verbindungen (Hub → Nodes) -->
+          <!-- Connections (hub to nodes) -->
           <line class="link pulse" x1="380" y1="170" x2="90" y2="70"/>
           <line class="link pulse" x1="380" y1="170" x2="640" y2="55"/>
           <line class="link pulse" x1="380" y1="170" x2="660" y2="200"/>
@@ -87,7 +87,7 @@
           <!-- Hub (Borg-Zentrale) -->
           <circle class="node-core hub-core" cx="380" cy="170" r="22"/>
           <text class="node-label hub-label" x="380" y="174" text-anchor="middle">HUB</text>
-          <!-- Nodes (Agenten) -->
+          <!-- Nodes (agents) -->
           <g class="orb"><circle class="node-core" cx="90" cy="70" r="13"/><text class="node-label" x="90" y="74" text-anchor="middle">ax41</text></g>
           <g class="orb"><circle class="node-core" cx="640" cy="55" r="13"/><text class="node-label" x="640" y="59" text-anchor="middle">mac</text></g>
           <g class="orb"><circle class="node-core" cx="660" cy="200" r="13"/><text class="node-label" x="660" y="204" text-anchor="middle">win1</text></g>
@@ -201,24 +201,56 @@ agent-mesh watch 60            # poll GitHub every 60s, sync when changed
 <li>Windows onboarding: <a href="docs/ONBOARDING-WINDOWS.md">docs/ONBOARDING-WINDOWS.md</a></li>
 </ul>
 
-<p>&gt; Generated automatically from docs/INSTALL.md — edit the source, not the outputs.</p>
-<h4>Peer-Kommunikation &amp; Sicherheit (v1.9+)</h4>
+<h4>Your own private mesh (one command)</h4>
 
-<p>Nachrichten zwischen Agents gehen <strong>sofort</strong> über einen WebSocket-Relay (kein</p>
-<p>Git-Warten). Der Relay läuft auf dem Hub und ist <strong>nur über Tailscale</strong></p>
-<p>erreichbar (privat, kein öffentlicher Port, keine Cloudflare-Kosten):</p>
+<p>You do not have to join anyone else&#x27;s network. Point agent-mesh at your own</p>
+<p>GitHub account and it creates a private repository for your data:</p>
+
+<pre class="code"><code>
+export AGENT_MESH_GH_ORG=&quot;your-github-name&quot;
+agent-mesh connect          # browser login, creates your private mesh repo
+agent-mesh init &lt;agent-name&gt;
+agent-mesh sync
+</code></pre>
+
+<p>Your memories, your skills, your vault — in a repository only you control.</p>
+<p>The public framework stays upstream; nothing personal ever goes into it.</p>
+
+<h4>Peer communication &amp; security</h4>
+
+<p>Messages between agents are delivered <strong>immediately</strong> over a WebSocket relay,</p>
+<p>with Git as the data layer and as a fallback:</p>
 
 <pre class="code"><code>
 AGENT_MESH_RELAY_URL=ws://100.84.254.40:8766
-# Kein Token mehr noetig — Auth laeuft ueber den eigenen age-Key (v1.11+)
 </code></pre>
 
 <ul>
-<li>Agents <strong>mit</strong> Tailscale: sofortige Zustellung via Relay</li>
-<li>Agents <strong>ohne</strong> Tailscale: automatischer Git-Fallback (60s) — kein Verlust</li>
-<li>Nachrichten bleiben sops-verschlüsselt (Relay sieht nur Blobs)</li>
-<li>Auth am Relay: HMAC-Token pro Agent</li>
+<li>Agents <strong>with</strong> Tailscale: instant delivery through the relay</li>
+<li>Agents <strong>without</strong> Tailscale: automatic Git fallback (60s) — nothing is lost</li>
+<li>Messages stay sops-encrypted end to end; the relay only ever sees blobs</li>
+<li>No shared secret: agents authenticate by <strong>age challenge-response</strong> against</li>
 </ul>
+<p>  their registered public key</p>
+<ul>
+<li>Recipient keys are <strong>pinned on first contact</strong> — a later key swap stops</li>
+</ul>
+<p>  encryption with a warning instead of silently trusting the new key</p>
+
+<p>Details, threat model and what the relay explicitly does *not* protect:</p>
+<p><a href="docs/peer-security.md">docs/peer-security.md</a></p>
+
+<h4>Dashboard</h4>
+
+<p>A read-only overview of the mesh — agents, roles, relay status and recent</p>
+<p>activity — behind a GitHub login. Only members of the mesh (org members or</p>
+<p>collaborators on the private repo) get in.</p>
+
+<p>Reporting a security issue: please do not open a public issue, see</p>
+<p><a href="CONTRIBUTING.md">CONTRIBUTING.md</a>.</p>
+
+
+<p>&gt; Generated automatically from docs/INSTALL.md — edit the source, not the outputs.</p>
       <div class="links">
         <a href="https://github.com/moinsen-dev/agent-mesh" target="_blank" rel="noopener">→ github.com/moinsen-dev/agent-mesh</a>
         <a href="https://github.com/moinsen-dev" target="_blank" rel="noopener">→ more from moinsen-dev</a>

@@ -1,133 +1,131 @@
-# Migrationen
+# Migrations
 
-Was beim Sprung auf eine neue Version zu tun ist. `agent-mesh update` zeigt
-jedem Agent automatisch die Abschnitte, die zwischen seiner alten und der
-neuen Version liegen — niemand muss diese Datei von sich aus lesen.
+What to do when moving to a new version. `agent-mesh update` automatically
+shows every agent the sections between its old and the new version — nobody
+has to think of reading this file.
 
-Format: eine Überschrift `## vX.Y.Z` pro Version, darunter Klartext.
+Format: one `## vX.Y.Z` heading per version, plain text below it.
 
 ## v1.13.0
 
-**Sicherheits-Release. Das Relay-Protokoll hat sich geändert — bitte einmal lesen.**
+**Security release. The relay protocol changed — please read this once.**
 
-### 1. Das geteilte Relay-Token entfällt (ersatzlos)
+### 1. The shared relay token is gone (no replacement needed)
 
-Bisher wies sich jeder Agent mit `HMAC(gemeinsames_secret, agentname)` aus.
-Weil alle dasselbe Secret hatten, konnte jeder Agent das Token jedes anderen
-berechnen — also dessen Nachrichten abholen und unter dessen Namen senden.
+Until now every agent authenticated with `HMAC(shared_secret, agent_name)`.
+Because all agents needed the same secret, any agent could compute any other
+agent's token — collect their messages and send under their name.
 
-Neu: Der Relay verschlüsselt eine Zufalls-Nonce an deinen registrierten
-age-Public-Key, du entschlüsselst sie mit deinem privaten Key. Es wird kein
-Geheimnis mehr übertragen.
+Now the relay encrypts a random nonce to your registered age public key and
+you decrypt it with your private key. No secret is transmitted at all.
 
-**Was du tun musst — auf JEDEM Agent:**
+**What you have to do — on EVERY agent:**
 
 ```bash
-# 1. Die Token-Zeile aus der Konfiguration entfernen (sie tut nichts mehr):
+# 1. Remove the token line from your config (it does nothing now):
 sed -i.bak '/^AGENT_MESH_RELAY_TOKEN=/d' ~/.agent-mesh/agent-mesh.conf
 
-# 2. Prüfen, dass der eigene age-Key da ist und der Relay ihn kennt:
+# 2. Verify your key is in place and the relay knows it:
 agent-mesh doctor --security
 ```
 
-`AGENT_MESH_RELAY_URL` bleibt unverändert.
+`AGENT_MESH_RELAY_URL` stays as it is.
 
-**Was du NICHT tun musst:** nichts neu verteilen, nichts rotieren. Der Key,
-mit dem du dich ausweist, ist derselbe, den du seit `init` hast.
+**What you do NOT have to do:** nothing to redistribute, nothing to rotate.
+The key you authenticate with is the same one you have had since `init`.
 
-**Solange der Hub noch alt ist:** Peer-Zustellung schlägt fehl und `send`
-fällt automatisch auf Git zurück (60 s). Es geht nichts verloren — die
-Reihenfolge des Ausrollens ist also egal.
+**While the hub is still on the old version:** peer delivery fails and `send`
+falls back to Git automatically (60s). Nothing is lost, so the rollout order
+does not matter.
 
-### 2. Nur auf dem HUB: Relay-Dienst umstellen
+### 2. HUB only: switch the relay service over
 
-Der Relay braucht jetzt Lesezugriff auf die Key-Registry statt eines Tokens:
+The relay now needs read access to the key registry instead of a token:
 
 ```bash
-# Neue Unit einspielen und Token-Umgebung entfernen
 sudo cp /usr/local/bin/agent-mesh-relay.service /etc/systemd/system/
-sudo rm -f /etc/agent-mesh/relay.env          # enthielt nur das alte Token
+sudo rm -f /etc/agent-mesh/relay.env          # held nothing but the old token
 sudo systemctl daemon-reload
 sudo systemctl restart agent-mesh-relay
 sudo systemctl status agent-mesh-relay --no-pager | head -5
 ```
 
-Wichtig: `--host` steht jetzt auf `127.0.0.1` statt `0.0.0.0`. Wenn die Agents
-den Relay über Tailscale erreichen sollen, trage die **Tailscale-IP** in der
-Unit ein (z.B. `--host 100.84.254.40`) — nicht `0.0.0.0`. Die Doku hat schon
-immer „nur über Tailscale erreichbar" versprochen; vorher hielt der Code das
-nicht ein und der Port war öffentlich.
+Important: `--host` now defaults to `127.0.0.1` instead of `0.0.0.0`. If
+agents reach the relay over Tailscale, put the **Tailscale IP** in the unit
+(e.g. `--host 100.84.254.40`) — not `0.0.0.0`. The documentation always
+promised "reachable over Tailscale only"; the code did not keep that promise
+and the port was public.
 
-Danach das alte Secret aus dem Vault nehmen — es hat keine Funktion mehr und
-sollte nicht als „noch gültig" herumliegen:
+Then retire the old secret — it has no function left and should not sit
+around looking valid:
 
 ```bash
 cd ~/.agent-mesh/memories
 git rm -q vault/secrets/relay-token.yaml 2>/dev/null \
-  && git commit -q -m "vault: relay-token entfernt (v1.13.0 nutzt age-Challenge-Response)" \
+  && git commit -q -m "vault: remove relay-token (v1.13.0 uses age challenge-response)" \
   && git push
 ```
 
-### 3. Key-Pinning ist ab jetzt aktiv (passiert von selbst)
+### 3. Key pinning is now active (happens by itself)
 
-Beim ersten `send`/`vault set` an einen Agent merkt sich dein Agent dessen
-Public-Key lokal (`PIN_<agent>=` in `agent-mesh.conf`). Ändert sich der Key
-später, bricht die Verschlüsselung mit einer deutlichen Meldung ab, statt
-still an den neuen — möglicherweise untergeschobenen — Key zu verschlüsseln.
+The first time you `send` to an agent or run `vault set` for it, your agent
+records that agent's public key locally (`PIN_<agent>=` in
+`agent-mesh.conf`). If the key changes later, encryption stops with a clear
+message instead of silently encrypting to a new — possibly substituted — key.
 
-- Pins ansehen: `agent-mesh vault pins`
-- Nach einem **echten** Key-Wechsel übernehmen: `agent-mesh vault repin <agent>`
+- Review pins: `agent-mesh vault pins`
+- Accept a **genuine** key change: `agent-mesh vault repin <agent>`
 
-Beim Übernehmen wirst du zur Bestätigung über einen zweiten Kanal
-aufgefordert. Das ist ernst gemeint: genau hier würde ein Angriff sichtbar.
+Accepting asks you to confirm over a second channel. That prompt is meant
+seriously: this is exactly where an attack would become visible.
 
-### 4. `vault revoke` verteilt keine Secrets mehr breit
+### 4. `vault revoke` no longer spreads secrets widely
 
-Bisher verschlüsselte `revoke` jedes Secret an ALLE verbliebenen Keys — aus
-„nur für den Hub" wurde dabei unbemerkt „für alle". Jetzt behält jedes Secret
-seine eigene Empfängerliste, abzüglich des widerrufenen Agents.
+Previously `revoke` re-encrypted every secret to ALL remaining keys — turning
+"hub only" into "everyone" without saying so. Now each secret keeps its own
+recipient list, minus the revoked agent.
 
-**Einmalige Nachkontrolle empfohlen**, falls in der Vergangenheit ein `revoke`
-lief:
+**One-time check recommended** if a `revoke` ever ran in the past:
 
 ```bash
-agent-mesh vault list           # welche Secrets kannst du lesen?
+agent-mesh vault list           # which secrets can you read?
 ```
 
-Kannst du Secrets lesen, die dich nichts angehen, wurden sie durch das alte
-Verhalten breit verteilt — dann einmal neu setzen:
-`agent-mesh vault set <key> <wert> --for <die-richtigen-agents>`
+If you can read secrets that are none of your business, the old behaviour
+spread them. Set those once more:
+`agent-mesh vault set <key> <value> --for <the-right-agents>`
 
-### 5. Nur auf dem HUB: Dashboard einspielen und neu starten
+### 5. HUB only: deploy and restart the dashboard
 
-Der GitHub-OAuth-Login aus v1.11.0 hatte zwei Fehler, die zusammen unangenehm
-waren: Die OAuth-`state`-Werte lagen in derselben Map wie echte Sessions, und
-`requireAuth` prüfte nur, ob ein Eintrag existiert und noch gültig ist. Ein
-`GET /login` liefert den `state` offen im Redirect — mit dem Cookie
-`mesh_session=oauth_<state>` kam man ohne Anmeldung an alle Daten. Gleichzeitig
-funktionierte der echte Login gar nicht (`awaitFetch` wurde nie abgewartet).
+The GitHub OAuth login from v1.11.0 had two flaws that combined badly: the
+OAuth `state` values lived in the same map as real sessions, and
+`requireAuth` only checked that an entry existed and had not expired. A
+`GET /login` returns the `state` openly in the redirect — with the cookie
+`mesh_session=oauth_<state>` anyone reached all data without logging in. At
+the same time the real login did not work at all (`awaitFetch` was never
+awaited).
 
-**Achtung, hier gibt es einen Henne-Ei-Effekt:** `install_framework` hat bis
-v1.12 nur `agent-mesh`, `*.sh` und `*.py` kopiert — **niemals `.js`**. Das
-Dashboard wurde vom Update also nie verteilt. Ab v1.13.0 ist `.js` mit dabei,
-aber beim Update *auf* v1.13.0 läuft noch die alte Kopierschleife. Dieses eine
-Mal muss die Datei von Hand rüber:
+**Careful, there is a chicken-and-egg problem here:** until v1.12
+`install_framework` only copied `agent-mesh`, `*.sh` and `*.py` — **never
+`.js`**. The dashboard was therefore never distributed by the updater. From
+v1.13.0 `.js` is included, but the update *to* v1.13.0 still runs the old
+copy loop. This one time the file has to be moved by hand:
 
 ```bash
-# 1. Datei aus dem frisch gepullten Framework-Klon holen
+# 1. Take the file from the freshly pulled framework clone
 sudo cp ~/.agent-mesh/framework/agent-mesh-dashboard.js /usr/local/bin/
 sudo chmod +x /usr/local/bin/agent-mesh-dashboard.js
 
-# 2. Wie heisst der Dienst? (Es liegt keine .service-Datei im Repo —
-#    die Unit wurde auf dem Hub von Hand angelegt.)
+# 2. What is the service called? (There is no .service file in the repo —
+#    the unit was created by hand on the hub.)
 systemctl list-units --type=service | grep -i -E 'dashboard|mesh-console'
 
-# 3. Mit dem gefundenen Namen neu starten und nachsehen
-sudo systemctl restart <gefundener-name>
-sudo systemctl status  <gefundener-name> --no-pager | head -5
+# 3. Restart with the name you found and check
+sudo systemctl restart <the-name-you-found>
+sudo systemctl status  <the-name-you-found> --no-pager | head -5
 ```
 
-Prüfen, dass die Umgehung wirklich zu ist — von aussen, mit echter URL:
+Verify the bypass is really closed — from outside, against the real URL:
 
 ```bash
 STATE=$(curl -s -i https://mesh-console.moinsen.dev/login \
@@ -136,19 +134,19 @@ curl -s -o /dev/null -w '%{http_code}\n' \
      -H "Cookie: mesh_session=oauth_$STATE" \
      https://mesh-console.moinsen.dev/api/status
 ```
-Erwartet: **401**. Kommt **200**, läuft noch der alte Code — dann ist Schritt 1
-nicht angekommen.
+Expected: **401**. If you get **200**, the old code is still running and step
+1 did not land.
 
-Wer sich in der Zwischenzeit angemeldet hat, muss sich neu anmelden — alte
-Sessions sind mit dem Neustart weg. Das ist beabsichtigt.
+Anyone logged in meanwhile has to log in again — old sessions are gone with
+the restart. That is intended.
 
-### 6. Nebenbei repariert
+### 6. Fixed along the way
 
-- `vault revoke` und `agent-mesh connect` liefen auf **macOS** nie durch
-  (`${var,,}` ist bash-4-Syntax, macOS hat bash 3.2). Jetzt portabel.
-- Dashboard: Agent-Namen gehen nicht mehr durch die Shell und nicht mehr als
-  HTML in die Seite.
-- Dashboard: Der Mitgliedschafts-Check lief in ein 10-**Millisekunden**-Timeout
-  und schlug deshalb immer fehl. Jetzt 10 Sekunden.
-- `agent-mesh update` verteilt ab jetzt auch `.js`-Dateien. Vorher meldete es
-  Erfolg, ohne das Dashboard je angefasst zu haben.
+- `vault revoke` and `agent-mesh connect` never ran through on **macOS**
+  (`${var,,}` is bash 4 syntax, macOS ships bash 3.2). Portable now.
+- Dashboard: agent names no longer pass through a shell, and no longer enter
+  the page as HTML.
+- Dashboard: the membership check ran into a 10-**millisecond** timeout and
+  therefore always failed. Now 10 seconds.
+- `agent-mesh update` now distributes `.js` files as well. Before, it
+  reported success without ever touching the dashboard.

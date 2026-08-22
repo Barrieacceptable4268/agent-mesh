@@ -1,67 +1,66 @@
-## Peer-Kommunikation & Sicherheit (v1.13+)
+## Peer communication & security (v1.13+)
 
-Nachrichten zwischen Agents gehen **sofort** über einen WebSocket-Relay (kein
-Git-Warten). Der Relay läuft auf dem Hub und soll **nur über Tailscale**
-erreichbar sein (privat, kein öffentlicher Port, keine Cloudflare-Kosten):
+Messages between agents are delivered **immediately** over a WebSocket relay
+(no waiting for Git). The relay runs on the hub and is meant to be reachable
+**over Tailscale only** — private, no public port, no Cloudflare cost:
 
 ```
 AGENT_MESH_RELAY_URL=ws://100.84.254.40:8766
 ```
 
-Ein Relay-Token gibt es nicht mehr — siehe unten.
+There is no relay token any more — see below.
 
-- Agents **mit** Tailscale: sofortige Zustellung via Relay
-- Agents **ohne** Tailscale: automatischer Git-Fallback (60s) — kein Verlust
-- Nachrichten bleiben sops-verschlüsselt (Relay sieht nur Blobs)
+- Agents **with** Tailscale: instant delivery through the relay
+- Agents **without** Tailscale: automatic Git fallback (60s) — nothing is lost
+- Messages stay sops-encrypted (the relay only ever sees blobs)
 
-### Auth: age-Challenge-Response (seit v1.13.0)
+### Auth: age challenge-response (since v1.13.0)
 
-Bis v1.10 wies sich jeder Agent mit `HMAC(gemeinsames_secret, agentname)` aus.
-Das war kein Identitätsnachweis: Weil alle Agents dasselbe Secret brauchten,
-konnte jeder das Token jedes anderen berechnen — und sich als beliebiger Agent
-anmelden, dessen Offline-Queue leeren und unter dessen Namen senden.
+Up to v1.10 every agent authenticated with `HMAC(shared_secret, agent_name)`.
+That was never proof of identity: because all agents needed the same secret,
+any one of them could compute any other's token — log in as any agent, drain
+their offline queue and send under their name.
 
-Seit v1.13.0:
+Since v1.13.0:
 
-1. Agent meldet nur seinen Namen an.
-2. Der Relay zieht den Public-Key aus `vault/keys/<agent>.age.pub`,
-   verschlüsselt eine frische Zufalls-Nonce daran und schickt sie zurück.
-3. Der Agent entschlüsselt sie mit seinem privaten Key und sendet sie zurück.
+1. The agent announces only its name.
+2. The relay reads the public key from `vault/keys/<agent>.age.pub`, encrypts
+   a fresh random nonce to it and sends it back.
+3. The agent decrypts it with its private key and returns it.
 
-Damit verlässt kein Geheimnis je den Agent, jede Verbindung hat eine neue
-Nonce (nichts ist wiederspielbar), und ein Widerruf wirkt sofort: Public-Key
-aus der Registry gelöscht → Login unmöglich.
+No secret ever leaves the agent, every connection gets a new nonce (nothing
+can be replayed), and revocation takes effect immediately: delete the public
+key from the registry and login becomes impossible.
 
-### Was der Relay NICHT schützt
+### What the relay does NOT protect
 
-- **Metadaten.** Wer wem wann wie viel schickt, steht im Relay-Log und im
-  Klartext in den Git-Mailbox-Dateien. Verschlüsselt ist der Inhalt, nicht der
-  Umschlag.
-- **Absender-Echtheit auf Inhaltsebene.** age verschlüsselt an einen
-  öffentlichen Key — wer den kennt, kann eine Nachricht *erzeugen*. Der Relay
-  authentifiziert die Verbindung, nicht den Text darin.
+- **Metadata.** Who talks to whom, when, and how much is in the relay log and
+  in plain text in the Git mailbox files. The content is encrypted, the
+  envelope is not.
+- **Sender authenticity at the content level.** age encrypts to a *public*
+  key — anyone who has it can *create* a message. The relay authenticates the
+  connection, not the text inside it.
 
-### Bind-Adresse
+### Bind address
 
-Der Relay bindet standardmäßig auf `127.0.0.1`. Für Tailscale-Erreichbarkeit
-gehört die **Tailscale-IP** in die systemd-Unit (`--host 100.84.254.40`),
-nicht `0.0.0.0`. Zum Prüfen, dass wirklich kein öffentlicher Port offen ist:
+The relay binds to `127.0.0.1` by default. For Tailscale reachability put the
+**Tailscale IP** in the systemd unit (`--host 100.84.254.40`), never
+`0.0.0.0`. To confirm no public port is open:
 
 ```bash
-ss -tlnp | grep 8766          # auf dem Hub
-nc -vz <öffentliche-ip> 8766  # von aussen — muss scheitern
+ss -tlnp | grep 8766          # on the hub
+nc -vz <public-ip> 8766       # from outside — must fail
 ```
 
-### Key-Pinning
+### Key pinning
 
-Jeder Agent merkt sich die Public-Keys der Gegenstellen beim ersten Kontakt
-(`PIN_<agent>=` in `agent-mesh.conf`). Ein späterer Key-Wechsel bricht die
-Verschlüsselung mit einer Warnung ab, statt still an den neuen Key zu
-verschlüsseln — die Registry ist nur ein Verzeichnis im Repo und für jeden
-mit Push-Recht beschreibbar.
+Every agent records the public keys of its counterparts on first contact
+(`PIN_<agent>=` in `agent-mesh.conf`). A later key change aborts encryption
+with a warning instead of silently encrypting to the new key — the registry
+is just a directory in the repo and writable by anyone with push access.
 
 ```bash
-agent-mesh vault pins           # Stand ansehen
-agent-mesh vault repin <agent>  # echten Key-Wechsel übernehmen
-agent-mesh doctor --security    # Gesamtstand prüfen
+agent-mesh vault pins           # review
+agent-mesh vault repin <agent>  # accept a genuine key change
+agent-mesh doctor --security    # overall state
 ```

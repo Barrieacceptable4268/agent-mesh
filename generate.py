@@ -240,7 +240,7 @@ def build_site(install_md: str) -> str:
               <stop offset="100%" stop-color="#48d597" stop-opacity="0"/>
             </radialGradient>
           </defs>
-          <!-- Verbindungen (Hub → Nodes) -->
+          <!-- Connections (hub to nodes) -->
           <line class="link pulse" x1="380" y1="170" x2="90" y2="70"/>
           <line class="link pulse" x1="380" y1="170" x2="640" y2="55"/>
           <line class="link pulse" x1="380" y1="170" x2="660" y2="200"/>
@@ -253,7 +253,7 @@ def build_site(install_md: str) -> str:
           <!-- Hub (Borg-Zentrale) -->
           <circle class="node-core hub-core" cx="380" cy="170" r="22"/>
           <text class="node-label hub-label" x="380" y="174" text-anchor="middle">HUB</text>
-          <!-- Nodes (Agenten) -->
+          <!-- Nodes (agents) -->
           <g class="orb"><circle class="node-core" cx="90" cy="70" r="13"/><text class="node-label" x="90" y="74" text-anchor="middle">ax41</text></g>
           <g class="orb"><circle class="node-core" cx="640" cy="55" r="13"/><text class="node-label" x="640" y="59" text-anchor="middle">mac</text></g>
           <g class="orb"><circle class="node-core" cx="660" cy="200" r="13"/><text class="node-label" x="660" y="204" text-anchor="middle">win1</text></g>

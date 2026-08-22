@@ -1,87 +1,94 @@
-# Onboarding Windows: Hermes-Agent auf einem Windows-Rechner ins Mesh
+# Onboarding: Windows
 
-Hermes läuft nativ auf Windows (PowerShell, Windows Terminal, git-bash). Das
-mesh-CLI ist ein Bash-Skript → **git-bash verwenden** (kommt mit Git for
-Windows: https://git-scm.com/download/win).
+The agent-mesh CLI is a bash script, so on Windows you run it in **git-bash**
+(ships with [Git for Windows](https://git-scm.com/download/win)). Everything
+below assumes a git-bash prompt unless it says PowerShell.
 
-## 1 · Voraussetzungen
+## 1 · Prerequisites
 
-| Tool | Windows-Installation |
+| Tool | Install on Windows |
 |---|---|
-| **Git for Windows** | https://git-scm.com/download/win (bringt git-bash mit) |
-| **Hermes** | https://hermes-agent.nousresearch.com/docs (native Installation) |
-| **age** | `scoop install age` oder https://github.com/FiloSottile/age/releases (age.exe in PATH) |
-| **sops** | `scoop install sops` oder https://github.com/getsops/sops/releases (sops.exe in PATH) |
-| **SSH-Key** | `ssh-keygen -t ed25519` → Pub-Key auf GitHub hinterlegen |
+| **Git for Windows** | https://git-scm.com/download/win (brings git-bash) |
+| **age** | `scoop install age` or https://github.com/FiloSottile/age/releases |
+| **sops** | `scoop install sops` or https://github.com/getsops/sops/releases |
+| **GitHub CLI** | `scoop install gh` — used for the browser login |
+| **Hermes** *(optional)* | https://hermes-agent.nousresearch.com/docs — only needed to export agent knowledge |
 
-> **scoop** (Windows-Paketmanager): `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser; irm get.scoop.sh | iex`
+> **scoop** (Windows package manager):
+> `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser; irm get.scoop.sh | iex`
 
-## 2 · Framework installieren (in git-bash)
+## 2 · Install
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/moinsen-dev/agent-mesh/main/agent-mesh -o ~/.local/bin/mesh
-curl -fsSL https://raw.githubusercontent.com/moinsen-dev/agent-mesh/main/agent-mesh-a2a.sh -o ~/.local/bin/agent-mesh-a2a.sh
-curl -fsSL https://raw.githubusercontent.com/moinsen-dev/agent-mesh/main/mesh-update.sh -o ~/.local/bin/mesh-update.sh
-chmod +x ~/.local/bin/mesh ~/.local/bin/agent-mesh-a2a.sh ~/.local/bin/mesh-update.sh
-# PATH ergänzen (git-bash): echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
-```
-
-## 3 · Agent initialisieren
+Same one-liner as everywhere else — run it in git-bash:
 
 ```bash
-agent-mesh init <hostname>     # z.B. "win-office" oder "win-laptop"
-agent-mesh sync                # Wissen exportieren + pushen
-agent-mesh role worker         # oder specialist
-agent-mesh agents              # prüfen: Agent ist sichtbar
+curl -fsSL https://raw.githubusercontent.com/moinsen-dev/agent-mesh/main/install.sh | bash
 ```
 
-## 4 · Windows-spezifische Pfade
+The installer picks `~/.local/bin` when `/usr/local/bin` is not writable and
+tells you if that directory is not on your PATH.
 
-- `MESH_HOME` = `$HOME/.hermes-mesh` → in git-bash: `C:/Users/<name>/.hermes-mesh`
-- Forward-Slashes verwenden (Windows-Hermes akzeptiert sie überall)
-- Private Keys: `$HOME/.hermes-mesh/keys/<name>.age` (nicht committen!)
+## 3 · Connect and initialise
 
-## 5 · Cron (geplante Syncs) — Windows Task Scheduler
+```bash
+agent-mesh connect             # browser login, links your GitHub account
+agent-mesh init win-office     # pick a name for this machine
+agent-mesh sync                # registers your public key in the mesh
+agent-mesh role worker         # or: specialist
+agent-mesh doctor              # confirm everything is in place
+```
+
+## 4 · Windows-specific paths
+
+- Home is `$HOME/.agent-mesh` → in git-bash: `C:/Users/<name>/.agent-mesh`
+- Use forward slashes; git-bash accepts them everywhere
+- Your private key lives at `$HOME/.agent-mesh/keys/<name>.age` — **never
+  commit it**, and keep it readable only by you
+
+## 5 · Run the sync daemon
+
+The built-in service manager knows the Windows Task Scheduler:
+
+```bash
+agent-mesh service install --interval 60
+agent-mesh service status
+agent-mesh service logs 30
+```
+
+This registers a task named "AgentMesh Watcher" that starts at logon. If you
+would rather do it by hand, PowerShell:
 
 ```powershell
-# PowerShell (als Admin): täglich 06:00 + 18:00 agent-mesh sync
 $action  = New-ScheduledTaskAction -Execute "C:\Program Files\Git\bin\bash.exe" `
-  -Argument "-lc '/c/Users/$env:USERNAME/.local/bin/agent-mesh sync'"
-$trigger = New-ScheduledTaskTrigger -Daily -At 06:00
-Register-ScheduledTask -TaskName "mesh-sync" -Action $action -Trigger $trigger -Force
-$trigger2 = New-ScheduledTaskTrigger -Daily -At 18:00
-Register-ScheduledTask -TaskName "mesh-sync-eve" -Action $action -Trigger $trigger2 -Force
+  -Argument "-lc 'agent-mesh watch 60'"
+$trigger = New-ScheduledTaskTrigger -AtLogon
+Register-ScheduledTask -TaskName "AgentMesh Watcher" -Action $action -Trigger $trigger -Force
 ```
 
-## 6 · Echtzeit (optional) — Windows: kein systemd
+## 6 · Real-time messages
 
-Der Webhook-Listener (`agent-mesh-webhook.py`) läuft auf Windows als geplante
-Aufgabe oder via `pythonw` im Hintergrund. Empfehlung für Windows-Clients:
-**nicht nötig** — der Hub (Linux) empfängt Webhooks und andere Agents sehen
-neue Nachrichten beim nächsten `agent-mesh sync` (Task Scheduler 2× täglich).
+Windows has no systemd, so the webhook listener is not used here. You do not
+need it: the watch daemon polls every 60 seconds, and the relay delivers
+messages instantly whenever this machine is online and reachable.
 
-## 7 · Update-Mechanismus (alle Plattformen)
+## 7 · Updates
+
+Agents update themselves hourly. To do it now:
 
 ```bash
-agent-mesh update --check     # Version prüfen (Lokal vs. Remote)
-agent-mesh update             # Framework pullen + installieren
-agent-mesh update --force     # Neu installieren trotz gleicher Version
+agent-mesh update --check      # compare local and remote version
+agent-mesh update              # pull and install
+agent-mesh doctor --security   # confirm the security state after an update
 ```
 
-Windows Task Scheduler (wöchentlich):
-```powershell
-$action  = New-ScheduledTaskAction -Execute "C:\Program Files\Git\bin\bash.exe" `
-  -Argument "-lc '/c/Users/$env:USERNAME/.local/bin/agent-mesh update'"
-$trigger = New-ScheduledTaskTrigger -Weekly -DaysOfWeek Monday -At 07:00
-Register-ScheduledTask -TaskName "mesh-update" -Action $action -Trigger $trigger -Force
-```
+## Known Windows pitfalls
 
-## Bekannte Windows-Fallstricke
-
-- **LF/CRLF**: Git warnt "LF will be replaced by CRLF" — kosmetisch, die
-  Repo-`.gitattributes` normalisiert. Skripte mit `chmod +x` ausführen.
-- **Zeilenumbrüche**: Editor auf LF stellen (nicht CRLF) für mesh-Skripte.
-- **sops/age in git-bash**: `where.exe sops` / `where.exe age` — falls nicht
-  gefunden, scoop-Pfad (`~/scoop/shims`) zum PATH hinzufügen.
-- **Vault auf Windows**: `SOPS_AGE_KEY_FILE` funktioniert gleich — der Key
-  liegt unter `$HOME/.hermes-mesh/keys/`.
+- **Line endings.** Git may warn "LF will be replaced by CRLF". Set your
+  editor to LF for mesh scripts — a CRLF script fails with confusing errors.
+- **age / sops not found in git-bash.** Check with `where.exe sops` and
+  `where.exe age`; if they are missing, add the scoop shim directory
+  (`~/scoop/shims`) to your PATH.
+- **`agent-mesh` not found after install.** Add `~/.local/bin` to your PATH:
+  `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc`
+- **Vault access.** `SOPS_AGE_KEY_FILE` works the same as on Linux and macOS;
+  the key is under `$HOME/.agent-mesh/keys/`.
