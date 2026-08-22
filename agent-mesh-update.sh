@@ -67,6 +67,47 @@ install_framework() {
   fi
 }
 
+# ── Migrations-Hinweise anzeigen (ab v1.11.0) ──
+# Ein Update, das stillschweigend das Protokoll ändert, ist eine Falle: Der
+# Agent läuft weiter, aber irgendetwas tut es nicht mehr, und niemand weiß
+# warum. Deshalb bekommt JEDER Agent nach dem Update genau die Abschnitte aus
+# MIGRATIONS.md zu sehen, die zwischen seiner alten und der neuen Version
+# liegen — im Terminal wie im watch.log.
+show_migrations() {
+  # $1 = Version VORHER, $2 = Version NACHHER
+  local mf="$FRAMEWORK_DIR/MIGRATIONS.md"
+  [ -f "$mf" ] || return 0
+  local notes
+  notes=$("$PYTHON_BIN" - "$mf" "$1" "$2" << 'MIGPY'
+import re, sys
+path, old, new = sys.argv[1], sys.argv[2], sys.argv[3]
+
+def ver(v):
+    nums = re.findall(r"[0-9]+", v)[:3]
+    return tuple(int(x) for x in nums) if nums else (0, 0, 0)
+
+text = open(path, encoding="utf-8").read()
+out = []
+for part in re.split(r"^## v", text, flags=re.M)[1:]:
+    head = part.split("\n", 1)[0].strip()
+    if ver(old) < ver(head) <= ver(new):
+        out.append("## v" + part.rstrip())
+print("\n\n".join(out))
+MIGPY
+)
+  [ -n "$notes" ] || return 0
+  echo ""
+  echo "════════════════════════════════════════════════════════════════"
+  echo "  ⚠️  MIGRATION: v$1 → v$2 — bitte einmal lesen"
+  echo "════════════════════════════════════════════════════════════════"
+  echo "$notes"
+  echo "════════════════════════════════════════════════════════════════"
+  echo "  Prüfen, ob alles sitzt:  agent-mesh doctor --security"
+  echo "  Nochmal nachlesen:       $mf"
+  echo "════════════════════════════════════════════════════════════════"
+  echo ""
+}
+
 # Optional: Hermes selbst aktualisieren
 update_hermes() {
   if command -v hermes >/dev/null 2>&1; then
@@ -96,6 +137,7 @@ cmd_update() {
   [ -n "$do_check" ] && { update_hermes; return 0; }
 
   if [ "$(local_version)" != "$remote" ] || [ "${1:-}" = "--force" ]; then
+    local before; before=$(local_version)
     echo "── Pull vom public Repo ──"
     if [ -d "$FRAMEWORK_DIR/.git" ]; then
       # Framework-Klon ist nur ein Cache — lokale Änderungen (z.B. Test-VERSION)
@@ -109,6 +151,7 @@ cmd_update() {
     echo "── Installieren ──"
     install_framework
     echo "✅ Update abgeschlossen — neue Version: v$(local_version)"
+    show_migrations "$before" "$(local_version)"
     # Nach Update: Webhook-Dienst neu laden (falls vorhanden)
     if systemctl is-active mesh-webhook >/dev/null 2>&1; then
       systemctl restart mesh-webhook 2>/dev/null && echo "  ✓ mesh-webhook neu gestartet"

@@ -24,6 +24,8 @@ PRIVATE_REPO="agent-mesh-memories"
 
 die() { echo "❌ $*" >&2; exit 1; }
 info() { echo "ℹ️  $*"; }
+# macOS liefert bash 3.2 — ${var,,} ist bash-4-Syntax und bricht dort hart ab.
+lower_of() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 cmd_connect() {
   info "🔐 Agent-Mesh Connect — Browser-Autorisierung mit GitHub"
@@ -43,7 +45,7 @@ cmd_connect() {
     echo "──────────────────────────────────────────────"
     echo ""
     read -r -p "👉 Darf ich diesen Account mit dem Agent-Mesh verknüpfen? (ja/nein) " answer
-    case "${answer,,}" in
+    case "$(lower_of "$answer")" in
       j|ja|y|yes|yo) ;;
       *) die "Abbruch — keine Verknüpfung. Jederzeit möglich: agent-mesh connect" ;;
     esac

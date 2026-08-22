@@ -8,15 +8,115 @@
 #   agent-mesh doctor            # alle Checks
 #   agent-mesh doctor --vault    # nur Vault/Encryption-Checks
 #   agent-mesh doctor --net      # nur GitHub/Repo-Checks
+#   agent-mesh doctor --security # Sicherheitsstand nach v1.11.0 prüfen
 
 set -euo pipefail
+
+# ── Sicherheits-Check (v1.11.0, Audit 2026-08-22) ──
+# Beantwortet auf JEDEM Agent die Frage "ist die Migration bei mir angekommen?"
+# — und macht dabei einen ECHTEN age-Roundtrip statt nur Dateien zu zählen.
+security_checks() {
+  local ok=0 fail=0
+  pass() { ok=$((ok+1)); echo "  ✅ $*"; }
+  bad()  { fail=$((fail+1)); echo "  ❌ $*"; }
+  note() { echo "     $*"; }
+
+  echo "🔐 Sicherheitsstand (Agent: $AGENT_NAME)"
+  echo ""
+  echo "── Relay-Auth (Befund #4) ──"
+
+  if grep -q "^AGENT_MESH_RELAY_TOKEN=" "$CONF" 2>/dev/null; then
+    bad "Altes AGENT_MESH_RELAY_TOKEN steht noch in der Konfiguration"
+    note "Es hat keine Funktion mehr, gehört aber entfernt:"
+    note "  sed -i.bak '/^AGENT_MESH_RELAY_TOKEN=/d' $CONF"
+  else
+    pass "Kein geteiltes Relay-Token mehr in der Konfiguration"
+  fi
+
+  if [ -f "$AGE_KEY_FILE" ]; then
+    pass "Eigener age-Key vorhanden: $AGE_KEY_FILE"
+    local perm
+    perm=$(stat -f "%Lp" "$AGE_KEY_FILE" 2>/dev/null || stat -c "%a" "$AGE_KEY_FILE" 2>/dev/null || echo "?")
+    if [ "$perm" = "600" ] || [ "$perm" = "400" ]; then
+      pass "Key-Dateirechte: $perm"
+    else
+      bad "Key-Dateirechte sind $perm — sollten 600 sein"
+      note "  chmod 600 $AGE_KEY_FILE"
+    fi
+  else
+    bad "Eigener age-Key fehlt: $AGE_KEY_FILE — Relay-Auth unmöglich"
+  fi
+
+  # Echter Roundtrip: verschlüsseln an den eigenen registrierten Public-Key,
+  # dann mit dem privaten Key wieder öffnen. Genau das macht der Relay-Login.
+  local mypub="$MEMORIES_DIR/vault/keys/$AGENT_NAME.age.pub"
+  if [ -f "$mypub" ] && [ -f "$AGE_KEY_FILE" ] && command -v "$AGE_BIN" >/dev/null 2>&1; then
+    local probe back
+    probe="challenge-probe-$$"
+    back=$(printf '%s' "$probe" | "$AGE_BIN" --encrypt --armor --recipient "$(cat "$mypub")" 2>/dev/null \
+           | "$AGE_BIN" --decrypt --identity "$AGE_KEY_FILE" 2>/dev/null || true)
+    if [ "$back" = "$probe" ]; then
+      pass "age-Challenge-Response funktioniert (echter Roundtrip)"
+    else
+      bad "age-Roundtrip fehlgeschlagen — der Relay-Login würde scheitern"
+      note "Passt der registrierte Public-Key noch zum privaten Key?"
+      note "  age-keygen -y $AGE_KEY_FILE   ← muss gleich sein wie"
+      note "  cat $mypub"
+    fi
+  else
+    bad "Roundtrip nicht prüfbar (Public-Key registriert? age installiert?)"
+  fi
+
+  echo ""
+  echo "── Key-Pinning (Befund #6) ──"
+  local npins nkeys
+  npins=$(grep -c "^PIN_" "$CONF" 2>/dev/null || echo 0)
+  nkeys=$(ls "$MEMORIES_DIR"/vault/keys/*.pub 2>/dev/null | wc -l | tr -d ' ')
+  pass "$npins von $nkeys bekannten Agents gepinnt (wächst beim Benutzen)"
+  local drift=0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    local a="${line%%=*}"; a="${a#PIN_}"
+    local k="${line#*=}"
+    local f="$MEMORIES_DIR/vault/keys/$a.age.pub"
+    if [ -f "$f" ] && [ "$(cat "$f")" != "$k" ]; then
+      bad "KEY-ABWEICHUNG bei '$a' — gepinnter Key ≠ Registry-Key"
+      note "Erst über einen zweiten Kanal prüfen, dann: agent-mesh vault repin $a"
+      drift=1
+    fi
+  done < <(grep "^PIN_" "$CONF" 2>/dev/null || true)
+  [ "$drift" = "0" ] && pass "Keine Key-Abweichungen"
+
+  echo ""
+  echo "── Framework-Stand ──"
+  local v; v=$(cat "$FRAMEWORK_DIR/VERSION" 2>/dev/null || echo "?")
+  case "$v" in
+    1.1[1-9].*|1.[2-9][0-9].*|[2-9].*) pass "Framework v$v enthält die Sicherheits-Fixes" ;;
+    *) bad "Framework v$v ist älter als v1.11.0 — 'agent-mesh update' ausführen" ;;
+  esac
+
+  echo ""
+  if [ "$fail" -eq 0 ]; then
+    echo "✅ $ok Prüfungen bestanden — Sicherheitsstand v1.11.0 erreicht."
+  else
+    echo "⚠️  $ok bestanden, $fail offen — siehe die Hinweise oben."
+    echo "   Vollständige Anleitung: $FRAMEWORK_DIR/MIGRATIONS.md"
+  fi
+  return 0
+}
 
 cmd_doctor() {
   local mode="all"
   [ "${1:-}" = "--vault" ] && mode="vault"
   [ "${1:-}" = "--net" ] && mode="net"
+  [ "${1:-}" = "--security" ] && mode="security"
 
   load_conf
+  if [ "$mode" = "security" ]; then
+    security_checks
+    return 0
+  fi
+
   local ok=0 fail=0
 
   pass() { ok=$((ok+1)); echo "  ✅ $*"; }

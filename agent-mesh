@@ -69,6 +69,8 @@ AUTOFIX_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-autofix.sh"
 die() { echo "❌ $*" >&2; exit 1; }
 info() { echo "ℹ️  $*"; }
 warn() { echo "⚠️  $*" >&2; }
+# macOS liefert bash 3.2 — ${var,,} ist bash-4-Syntax und bricht dort hart ab.
+lower_of() { printf '%s' "$1" | tr '[:upper:]' '[:lower:]'; }
 
 # ── Windows/macOS/Git-Bash-Kompatibilitäts-Layer (Issues #1,#2 + macmini-Fund) ──
 # Python: python3 auf POSIX/macOS, python auf Windows (kein python3-Alias)
@@ -258,10 +260,61 @@ PYEOF
 vault_dir() { echo "$MEMORIES_DIR/vault/secrets"; }
 vault_file() { echo "$(vault_dir)/$1.yaml"; }
 
-# Public-Key eines Agents lesen (aus der Registry)
+# ── Key-Pinning (Security v1.2, Audit-Befund #6) ──
+# Die Empfänger-Registry ist nur ein Verzeichnis im privaten Repo: ohne
+# Signatur, ohne Herkunftsnachweis. Wer pushen darf, kann fremde .pub-Dateien
+# überschreiben und bekommt ab dem nächsten sync alle Nachrichten und Secrets,
+# die an diesen Agent gehen. Dagegen hilft TOFU: Beim ERSTEN Kontakt merken wir
+# uns den Key lokal in agent-mesh.conf (PIN_<agent>=<key>), danach ist jede
+# Abweichung ein harter Abbruch — kein stilles Weiterverschlüsseln.
+pin_get()    { grep "^PIN_$1=" "$CONF" 2>/dev/null | cut -d= -f2- | head -1; }
+pin_forget() {
+  [ -f "$CONF" ] || return 0
+  local tmp; tmp=$(mktemp)
+  grep -v "^PIN_$1=" "$CONF" > "$tmp" 2>/dev/null || true
+  cat "$tmp" > "$CONF" && rm -f "$tmp"
+}
+pin_set() {
+  pin_forget "$1"
+  printf 'PIN_%s=%s\n' "$1" "$2" >> "$CONF"
+}
+
+# Public-Key eines Agents lesen (aus der Registry, gegen den Pin geprüft).
+# ACHTUNG: stdout ist der Key — alle Meldungen müssen nach stderr!
 agent_pub() {
-  local f="$MEMORIES_DIR/vault/keys/$1.age.pub"
-  [ -f "$f" ] && cat "$f" || die "Kein Public-Key für Agent '$1' registriert (vault/keys/$1.age.pub fehlt — Agent muss erst sync'en)"
+  local a="$1"
+  local f="$MEMORIES_DIR/vault/keys/$a.age.pub"
+  [ -f "$f" ] || die "Kein Public-Key für Agent '$a' registriert (vault/keys/$a.age.pub fehlt — Agent muss erst sync'en)"
+  local pub; pub=$(cat "$f")
+  [ -n "$pub" ] || die "Public-Key für '$a' ist leer (vault/keys/$a.age.pub)"
+
+  local pinned; pinned=$(pin_get "$a")
+  if [ -z "$pinned" ]; then
+    pin_set "$a" "$pub"
+    echo "🔑 Key von '$a' erstmalig gepinnt (TOFU): ${pub:0:20}…" >&2
+  elif [ "$pinned" != "$pub" ]; then
+    die "🚨 KEY-WECHSEL bei Agent '$a' — Verschlüsselung abgebrochen!
+
+    Gepinnt (bekannt):  $pinned
+    In der Registry:    $pub
+
+  Entweder hat '$a' seinen Key legitim erneuert — oder jemand mit Push-Recht
+  hat die Registry manipuliert, um eure Nachrichten und Secrets mitzulesen.
+
+  → NICHT einfach bestätigen. Erst über einen ZWEITEN Kanal (Anruf, Signal,
+    direkte SSH-Sitzung) prüfen, ob der neue Key wirklich von '$a' stammt.
+  → Danach übernehmen mit:  agent-mesh vault repin $a"
+  fi
+  echo "$pub"
+}
+
+# Empfänger EINES bestehenden Secrets auslesen (aus dem sops-Metadatenblock).
+# Security v1.2 (Audit-Befund #5): revoke muss die ursprüngliche Empfänger-
+# liste jedes Secrets kennen — sonst wird beim Re-Encrypt aus Least Privilege
+# unbemerkt ein Broadcast an alle registrierten Keys.
+secret_recipients() {
+  # $1 = Pfad zur .yaml — echo: eine bech32-Adresse pro Zeile
+  grep -oE 'recipient: age1[0-9a-z]+' "$1" 2>/dev/null | awk '{print $2}' | sort -u
 }
 
 # Empfänger-Liste bauen: --for agent1,agent2 → kommagetrennte bech32-Keys
@@ -273,7 +326,14 @@ recipients_for() {
   for name in "${names[@]}"; do
     name=$(echo "$name" | xargs)  # trim
     [ -n "$name" ] || continue
-    keys+=("$(agent_pub "$name")")
+    local k
+    # WICHTIG: agent_pub kann per die() abbrechen — in einer Kommando-
+    # Substitution beendet das nur die Subshell. Deshalb Status prüfen und
+    # den Abbruch selbst weiterreichen (sonst liefe der Aufrufer mit einer
+    # unvollständigen oder leeren Empfängerliste weiter).
+    k=$(agent_pub "$name") || return 1
+    [ -n "$k" ] || return 1
+    keys+=("$k")
   done
   [ ${#keys[@]} -gt 0 ] || die "Keine gültigen Empfänger angegeben"
   printf '%s,' "${keys[@]}" | sed 's/,$//'
@@ -301,11 +361,28 @@ path, key, value = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(path, "w") as f: json.dump({key: value}, f, indent=2)
 EOF
 
+  # Empfänger ZUERST bestimmen und prüfen — erst danach verschlüsseln.
+  # (Früher stand recipients_for inline im sops-Aufruf. Ein die() darin läuft
+  #  in einer Subshell und beendet das Skript NICHT: bei abgelehntem Key-Pin
+  #  wurde das Secret trotzdem geschrieben — mit leerer Empfängerliste.)
+  local recipients
+  if ! recipients=$(recipients_for "$for_agents"); then
+    rm -f "$tmp"
+    die "Empfänger konnten nicht bestimmt werden — Secret NICHT geschrieben."
+  fi
+  if [ -z "$recipients" ]; then
+    rm -f "$tmp"
+    die "Leere Empfängerliste — Secret NICHT geschrieben."
+  fi
+
   # Mit NUR den angegebenen Empfängern verschlüsseln (Least Privilege!)
-  SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops --encrypt \
-    --age "$(recipients_for "$for_agents")" \
+  if ! SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops --encrypt \
+    --age "$recipients" \
     --input-type json --output-type yaml \
-    "$tmp" > "$vf" 2>/dev/null || die "Verschlüsselung fehlgeschlagen"
+    "$tmp" > "$vf" 2>/dev/null; then
+    rm -f "$tmp" "$vf"
+    die "Verschlüsselung fehlgeschlagen"
+  fi
   rm -f "$tmp"
 
   cd "$MEMORIES_DIR" && git add "vault/secrets/$key.yaml" vault/keys/ 2>/dev/null
@@ -364,6 +441,48 @@ cmd_vault_add_key() {
   info "✅ Public-Key für '$agent' registriert — andere Agents können ihn via --for adressieren."
 }
 
+# ── Pins anzeigen / bewusst erneuern (Audit-Befund #6) ──
+cmd_vault_pins() {
+  load_conf
+  local any=0
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    any=1
+    local a="${line%%=*}"; a="${a#PIN_}"
+    local k="${line#*=}"
+    local cur=""
+    [ -f "$MEMORIES_DIR/vault/keys/$a.age.pub" ] && cur=$(cat "$MEMORIES_DIR/vault/keys/$a.age.pub")
+    if [ -z "$cur" ]; then
+      echo "  ❔ $a — gepinnt, aber nicht mehr in der Registry"
+    elif [ "$cur" = "$k" ]; then
+      echo "  ✅ $a — ${k:0:24}…"
+    else
+      echo "  🚨 $a — ABWEICHUNG! gepinnt ${k:0:16}… · Registry ${cur:0:16}…"
+    fi
+  done < <(grep "^PIN_" "$CONF" 2>/dev/null || true)
+  [ "$any" = "1" ] || info "Noch keine Keys gepinnt (passiert automatisch beim ersten send/vault set)."
+}
+
+cmd_vault_repin() {
+  load_conf
+  [ $# -ge 1 ] || die "Usage: agent-mesh vault repin <agent-name>"
+  local a="$1"
+  local f="$MEMORIES_DIR/vault/keys/$a.age.pub"
+  [ -f "$f" ] || die "Kein Public-Key für '$a' in der Registry"
+  local pub; pub=$(cat "$f")
+  local old; old=$(pin_get "$a")
+  echo "Agent:    $a"
+  echo "Bisher:   ${old:-(kein Pin)}"
+  echo "Neu:      $pub"
+  echo ""
+  echo "⚠️  Nur bestätigen, wenn du den neuen Key über einen ZWEITEN Kanal"
+  echo "    (Anruf, Signal, SSH-Sitzung) mit '$a' abgeglichen hast."
+  read -r -p "👉 Neuen Key übernehmen? (uebernehmen) " a2
+  [ "$a2" = "uebernehmen" ] || die "Abgebrochen — Pin unverändert."
+  pin_set "$a" "$pub"
+  info "✅ Pin für '$a' erneuert."
+}
+
 # ── Security v1.1: Key-Revocation ──
 # Entfernt einen Agent aus der Vault-Registry UND verschlüsselt ALLE Secrets
 # neu OHNE dessen Key. Danach kann der entfernte Agent nichts mehr lesen.
@@ -388,12 +507,12 @@ cmd_vault_revoke() {
   echo "    - ALLE Secrets neu verschlüsselt OHNE $agent"
   echo "    - $agent kann danach KEINE Secrets mehr lesen"
   read -r -p "👉 Wirklich fortfahren? (ja/nein) " answer
-  case "${answer,,}" in
+  case "$(lower_of "$answer")" in
     j|ja|y|yes) ;;
     *) die "Abgebrochen." ;;
   esac
   read -r -p "👉 ENDGÜLTIG? Agent '$agent' unwiderruflich entfernen? (entfernen) " answer2
-  [ "${answer2,,}" = "entfernen" ] || die "Abgebrochen (Bestätigung war nicht 'entfernen')."
+  [ "$(lower_of "$answer2")" = "entfernen" ] || die "Abgebrochen (Bestätigung war nicht 'entfernen')."
 
   # 1. Alle Secrets entschlüsseln (eigener Key muss Empfänger sein)
   local d; d=$(vault_dir)
@@ -410,30 +529,44 @@ cmd_vault_revoke() {
   done
   [ "$count" -gt 0 ] || info "Keine entschlüsselbaren Secrets gefunden."
 
-  # 2. Key entfernen
+  # 2. Public-Key des zu entfernenden Agents merken, DANN löschen
+  local revoked_pub; revoked_pub=$(cat "$pub_file")
   rm -f "$pub_file"
+  pin_forget "$agent"
 
-  # 3. Alle Secrets neu verschlüsseln (ohne den entfernten Key)
-  local remaining
-  remaining=$(recipients_for "" )  # alle verbliebenen Keys (der eigene + andere)
+  # 3. Jedes Secret mit SEINER EIGENEN Empfängerliste neu verschlüsseln,
+  #    abzüglich des widerrufenen Keys (Audit-Befund #5).
+  #    Früher wurden hier ALLE registrierten Keys eingesetzt — das machte aus
+  #    jedem selektiv geteilten Secret einen Broadcast ans ganze Mesh.
+  local reenc=0 skipped=0
   for json in "$tmpdir"/*.json; do
     [ -f "$json" ] || continue
     local name; name=$(basename "$json" .json)
-    # Empfänger neu bestimmen: alle verbliebenen KEYS AUSSER dem entfernten
-    # → recipients_for ohne den entfernten Agent (der Key ist ja gelöscht → automatisch raus)
-    local recipients=""
-    local keys=()
-    for k in "$MEMORIES_DIR"/vault/keys/*.pub; do
-      [ -f "$k" ] && keys+=("$(cat "$k")")
-    done
-    [ ${#keys[@]} -gt 0 ] || die "Keine verbliebenen Keys — Vault kann nicht neu verschlüsselt werden"
-    recipients=$(printf '%s,' "${keys[@]}" | sed 's/,$//')
+    local orig="$d/$name.yaml"
 
+    # Ursprüngliche Empfänger dieses Secrets, ohne den widerrufenen Key
+    local keys=() r
+    while IFS= read -r r; do
+      [ -n "$r" ] || continue
+      [ "$r" = "$revoked_pub" ] && continue
+      keys+=("$r")
+    done < <(secret_recipients "$orig")
+
+    if [ ${#keys[@]} -eq 0 ]; then
+      warn "  ⚠️  '$name': nach dem Widerruf bliebe KEIN Empfänger übrig — unverändert gelassen."
+      warn "      → Secret bewusst neu setzen: agent-mesh vault set $name <wert> --for <agents>"
+      skipped=$((skipped+1))
+      continue
+    fi
+
+    local recipients; recipients=$(printf '%s,' "${keys[@]}" | sed 's/,$//')
     SOPS_AGE_KEY_FILE="$AGE_KEY_FILE" sops --encrypt \
       --age "$recipients" --input-type json --output-type yaml \
-      "$json" > "$d/$name.yaml" 2>/dev/null || die "Re-Encrypt von '$name' fehlgeschlagen"
-    info "  ✓ $name neu verschlüsselt (ohne $agent)"
+      "$json" > "$orig" 2>/dev/null || die "Re-Encrypt von '$name' fehlgeschlagen"
+    info "  ✓ $name neu verschlüsselt (${#keys[@]} Empfänger, ohne $agent)"
+    reenc=$((reenc+1))
   done
+  info "  → $reenc Secret(s) neu verschlüsselt, $skipped unverändert."
   rm -rf "$tmpdir"
 
   cd "$MEMORIES_DIR" && git add "vault/keys/" "vault/secrets/" >/dev/null 2>&1
@@ -501,7 +634,9 @@ case "${1:-}" in
              list) cmd_vault_list ;;
              add-key) cmd_vault_add_key "$@" ;;
              revoke) cmd_vault_revoke "$@" ;;
-             *) die "vault: {set|get|list|add-key|revoke}" ;;
+             pins) cmd_vault_pins ;;
+             repin) cmd_vault_repin "$@" ;;
+             *) die "vault: {set|get|list|add-key|revoke|pins|repin}" ;;
            esac ;;
   insight) shift; cmd_insight "$@" ;;
   watch)   shift; cmd_watch "$@" ;;

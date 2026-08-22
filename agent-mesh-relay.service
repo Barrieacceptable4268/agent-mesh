@@ -5,13 +5,14 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-Environment=AGENT_MESH_RELAY_TOKEN=%i
 EnvironmentFile=-/etc/agent-mesh/relay.env
 # Hermes-venv-Python nutzen (dort ist websockets installiert)
 Environment=PATH=/usr/local/lib/hermes-agent/venv/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/usr/local/lib/hermes-agent/venv/bin/python3 /usr/local/bin/agent-mesh-relay.py --port 8766 --queue-dir /var/lib/agent-mesh-relay
+ExecStart=/usr/local/lib/hermes-agent/venv/bin/python3 /usr/local/bin/agent-mesh-relay.py --port 8766 --host 127.0.0.1 --keys-dir /root/.agent-mesh/memories/vault/keys --queue-dir /var/lib/agent-mesh-relay
 Restart=always
 RestartSec=5
+# Audit-Befund #9: Bind-Adresse explizit. Fuer Tailscale-Erreichbarkeit
+# --host auf die Tailscale-IP setzen (z.B. 100.84.254.40), NICHT 0.0.0.0.
 User=root
 
 [Install]

@@ -93,13 +93,16 @@ push_retry() {
 
 # ── Peer-Kommunikation (WebSocket-Relay, 2026-08-22) ──
 # send versucht ZUERST den Relay (sofortige Zustellung), Fallback auf Git.
-# Relay-Config aus conf: AGENT_MESH_RELAY_URL + AGENT_MESH_RELAY_TOKEN
+# Relay-Config aus conf: AGENT_MESH_RELAY_URL (Auth laeuft ueber den age-Key)
 PEER_PY="$AGENT_MESH_HOME/framework/peer_client.py"
 [ -f "$PEER_PY" ] || PEER_PY="/usr/local/bin/agent-mesh-peer-client.py"
 
+# Security v1.2 (Audit-Befund #4): kein geteiltes Relay-Token mehr. Der Agent
+# weist sich mit seinem EIGENEN privaten age-Key aus (Challenge-Response) —
+# also braucht es nur noch die URL und den Key, den der Agent ohnehin hat.
 peer_available() {
   [ -n "$(grep '^AGENT_MESH_RELAY_URL=' "$CONF" 2>/dev/null | cut -d= -f2-)" ] \
-    && [ -n "$(grep '^AGENT_MESH_RELAY_TOKEN=' "$CONF" 2>/dev/null | cut -d= -f2-)" ] \
+    && [ -f "${AGE_KEY_FILE:-/nonexistent}" ] \
     && [ -f "$PEER_PY" ]
 }
 
@@ -108,17 +111,16 @@ peer_send() {
   # $1 = Empfänger, $2 = Pfad zur .enc-Datei (verschlüsselter Blob)
   local to="$1" encfile="$2"
   peer_available || return 1
-  local url token
+  local url
   url=$(grep "^AGENT_MESH_RELAY_URL=" "$CONF" | cut -d= -f2-)
-  token=$(grep "^AGENT_MESH_RELAY_TOKEN=" "$CONF" | cut -d= -f2-)
   [ -n "$url" ] || return 1
-  [ -n "$token" ] || return 1
   [ -n "$AGENT_NAME" ] || return 1
+  [ -f "${AGE_KEY_FILE:-/nonexistent}" ] || return 1
   # Blob base64-encodieren (JSON-sicher)
   local blob
   blob=$(base64 -w0 "$encfile" 2>/dev/null || base64 "$encfile" 2>/dev/null | tr -d '\n')
   [ -n "$blob" ] || return 1
-  timeout 8 "$PYTHON_BIN" "$PEER_PY" --url "$url" --token "$token" \
+  timeout 8 "$PYTHON_BIN" "$PEER_PY" --url "$url" --key-file "$AGE_KEY_FILE" \
     --agent "$AGENT_NAME" --to "$to" --blob "$blob" >/dev/null 2>&1
 }
 
@@ -129,19 +131,23 @@ peer_recv() {
     load_conf 2>/dev/null || true
   fi
   peer_available || return 1
-  local url token
+  local url
   url=$(grep "^AGENT_MESH_RELAY_URL=" "$CONF" | cut -d= -f2-)
-  token=$(grep "^AGENT_MESH_RELAY_TOKEN=" "$CONF" | cut -d= -f2-)
   [ -n "$url" ] || return 1
-  [ -n "$token" ] || return 1
   [ -n "$AGENT_NAME" ] || return 1
+  [ -f "${AGE_KEY_FILE:-/nonexistent}" ] || return 1
   local tmp; tmp=$(mktemp)
-  if timeout 8 "$PYTHON_BIN" "$PEER_PY" --url "$url" --token "$token" \
+  if timeout 8 "$PYTHON_BIN" "$PEER_PY" --url "$url" --key-file "$AGE_KEY_FILE" \
     --agent "$AGENT_NAME" --recv > "$tmp" 2>/dev/null; then
     # Blobs in Mailbox-Dateien übertragen (falls vorhanden)
     while IFS='|' read -r from blob; do
       [ -n "$from" ] || continue
       [ -n "$blob" ] || continue
+      # Befund #13: 'from' landet unten in einem JSON-Heredoc. Nur Namen aus
+      # dem erlaubten Zeichensatz — sonst liesse sich die Datei manipulieren.
+      case "$from" in
+        *[!A-Za-z0-9_-]*|"") warn "Relay lieferte unzulaessigen Absender — verworfen"; continue ;;
+      esac
       local id; id=$(next_msg_id)
       local dir="$MESSAGES_DIR/$AGENT_NAME"
       mkdir -p "$dir"

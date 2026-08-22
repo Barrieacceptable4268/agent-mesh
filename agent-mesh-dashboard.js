@@ -20,7 +20,7 @@ const http = require("http");
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const { execFileSync, execSync } = require("child_process");
+const { execFileSync } = require("child_process");
 
 const PORT = parseInt(process.env.DASHBOARD_PORT || "8770", 10);
 const HOST = process.env.DASHBOARD_HOST || "127.0.0.1";
@@ -113,7 +113,15 @@ function getData() {
       // Letzte Aktivität (git log)
       let lastActive = null;
       try {
-        const log = execSync(`git -C "${MEMORIES}/memories" log --format="%cr" --author="${name}" -1 2>/dev/null || git -C "${MEMORIES}/memories" log --format="%cr" -1`, { timeout: 5 }).toString().trim();
+        // SECURITY (Audit-Befund #7): `name` ist ein Verzeichnisname aus dem
+        // privaten Repo. In einem Shell-String wuerde $(…) ausgewertet — ein
+        // Agent koennte `agents/a$(befehl)/` committen. Daher execFileSync
+        // mit Argument-Array: keine Shell, keine Interpolation.
+        // (Der frueher hier stehende timeout von 5 waren MILLISEKUNDEN und hat
+        //  die Luecke nur zufaellig verdeckt — nicht darauf verlassen.)
+        const gitArgs = ["-C", path.join(MEMORIES, "memories"), "log", "--format=%cr", "-1"];
+        let log = execFileSync("git", [...gitArgs, `--author=${name}`], { timeout: 5000 }).toString().trim();
+        if (!log) log = execFileSync("git", gitArgs, { timeout: 5000 }).toString().trim();
         lastActive = log || null;
       } catch {}
       return { name, role, hasKey, lastActive, online: false };
@@ -125,7 +133,7 @@ function getData() {
 
   // Letzte Commits
   try {
-    const log = execSync(`git -C "${MEMORIES}/memories" log origin/main -8 --format="%h|%an|%s|%cr"`, { timeout: 5 }).toString().trim().split("\n");
+    const log = execFileSync("git", ["-C", path.join(MEMORIES, "memories"), "log", "origin/main", "-8", "--format=%h|%an|%s|%cr"], { timeout: 5000 }).toString().trim().split("\n");
     out.commits = log.filter(Boolean).map(l => { const [h, a, ...rest] = l.split("|"); return { h, a, s: rest.join("|") }; });
   } catch {}
 
@@ -135,7 +143,11 @@ function getData() {
 // ── Online-Status vom Relay abfragen (kleiner WS-Client, ohne websockets-Lib) ──
 function getRelayStatus(cb) {
   try {
-    const stats = execFileSync("bash", ["-c", `ss -tln | grep -c 8766`], { timeout: 3 }).toString().trim();
+    let stats = "0";
+    try {
+      const lines = execFileSync("ss", ["-tln"], { timeout: 3000 }).toString();
+      stats = String(lines.split("\n").filter(l => l.includes("8766")).length);
+    } catch {}
     // Online-Agents: über die Relay-API? Relay hat keine HTTP-API — lese systemd-Status
     let active = false;
     try { active = execFileSync("systemctl", ["is-active", "agent-mesh-relay"], { timeout: 3 }).toString().trim() === "active"; } catch {}
@@ -200,7 +212,7 @@ const server = http.createServer((req, res) => {
     sessions.set(token, { expiry: Date.now() + 12 * 3600 * 1000, user: login });
     res.writeHead(302, {
       "Location": "/",
-      "Set-Cookie": `mesh_session=${token}; HttpOnly; Path=/; Max-Age=43200; SameSite=Lax`,
+      "Set-Cookie": `mesh_session=${token}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=43200`,
     });
     res.end();
     return;
@@ -218,7 +230,7 @@ const server = http.createServer((req, res) => {
   if (url.pathname === "/api/logout") {
     const cookie = (req.headers.cookie || "").match(/mesh_session=([^;]+)/);
     if (cookie) sessions.delete(cookie[1]);
-    res.writeHead(200, { "Set-Cookie": "mesh_session=; HttpOnly; Path=/; Max-Age=0" });
+    res.writeHead(200, { "Set-Cookie": "mesh_session=; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age=0" });
     res.end("{}");
     return;
   }
@@ -321,8 +333,21 @@ async function load() {
     (d.agents || []).forEach(a => {
       const div = document.createElement('div');
       div.className = 'agent';
-      div.innerHTML = '<span><span class="dot ' + (a.online ? 'online' : 'offline') + '"></span>' + a.name + ' <span class="tag">' + (a.role || 'worker') + '</span></span>' +
-        '<span style="font-size:11px;color:var(--muted)">' + (a.lastActive || 'nie') + '</span>';
+      // Agent-Name und Rolle stammen aus dem Repo — nie als HTML einsetzen.
+      const left = document.createElement('span');
+      const dot = document.createElement('span');
+      dot.className = 'dot ' + (a.online ? 'online' : 'offline');
+      left.appendChild(dot);
+      left.appendChild(document.createTextNode(a.name + ' '));
+      const tag = document.createElement('span');
+      tag.className = 'tag';
+      tag.textContent = a.role || 'worker';
+      left.appendChild(tag);
+      const right = document.createElement('span');
+      right.style.cssText = 'font-size:11px;color:var(--muted)';
+      right.textContent = a.lastActive || 'nie';
+      div.appendChild(left);
+      div.appendChild(right);
       ag.appendChild(div);
     });
     // Commits
