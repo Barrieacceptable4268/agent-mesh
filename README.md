@@ -89,6 +89,8 @@ Cloudflare, no costs. The hub's webhook is an optional instant boost only.
 - Linux/macOS onboarding: [docs/ONBOARDING.md](docs/ONBOARDING.md)
 - Windows onboarding: [docs/ONBOARDING-WINDOWS.md](docs/ONBOARDING-WINDOWS.md)
 
+> Generated automatically from docs/INSTALL.md — edit the source, not the outputs.
+
 
 ## Commands
 
