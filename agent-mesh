@@ -284,11 +284,19 @@ PYEOF
   # Git ist ohnehin die Datenebene: kein neuer Port, kein Dienst, funktioniert
   # auch für Agents, die gerade offline sind, und die Historie fällt gratis ab.
   # Best effort — ein Fehler hier darf einen sync niemals scheitern lassen.
-  if cmd_report --json > "$agent_dir/report.json" 2>/dev/null; then
-    :
+  # Erst in eine Temp-Datei, dann PRÜFEN, dann übernehmen. Ein halb
+  # geschriebener oder mit Fremdausgabe verunreinigter Bericht ist schlimmer
+  # als gar keiner: er sieht in der Flotten-Übersicht wie ein defekter Agent
+  # aus, obwohl nur das Schreiben schiefging.
+  local _rep; _rep=$(mktemp)
+  if cmd_report --json > "$_rep" 2>/dev/null \
+     && [ -s "$_rep" ] \
+     && "$PYTHON_BIN" -c "import json,sys; json.load(open(sys.argv[1]))" "$_rep" 2>/dev/null; then
+    mv -f "$_rep" "$agent_dir/report.json"
   else
-    rm -f "$agent_dir/report.json"
-    warn "Zustandsbericht konnte nicht erzeugt werden (sync läuft weiter)"
+    warn "Zustandsbericht ungültig — nicht veröffentlicht (sync läuft weiter)"
+    warn "  Selbst ansehen: agent-mesh report --json | head -5"
+    rm -f "$_rep"
   fi
 
   # Commit + Push

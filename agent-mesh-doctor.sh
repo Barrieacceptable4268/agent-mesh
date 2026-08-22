@@ -342,9 +342,17 @@ rows = []
 for path in sorted(glob.glob(os.path.join(base, "*", "report.json"))):
     try:
         r = json.load(open(path, encoding="utf-8"))
-    except Exception:
+    except Exception as e:
+        # "defekt" allein hilft niemandem weiter — der Anfang der Datei und
+        # der Parser-Fehler sagen in einer Zeile, was schiefging.
+        try:
+            head = open(path, encoding="utf-8", errors="replace").read(70).replace("\n", "\\n")
+        except Exception:
+            head = "(nicht lesbar)"
+        size = os.path.getsize(path) if os.path.exists(path) else 0
         rows.append({"agent": os.path.basename(os.path.dirname(path)),
-                     "broken": True}); continue
+                     "broken": True, "why": f"{size} B, {type(e).__name__}: {head[:60]}"})
+        continue
     rows.append(r)
 
 def age(ts):
@@ -372,7 +380,7 @@ print("─" * 108)
 stale, behind, unhealthy = 0, 0, 0
 for r in rows:
     if r.get("broken"):
-        print(f"{r['agent']:<24} {'?':<9} {'defekt':<8} — Bericht nicht lesbar")
+        print(f"{r['agent']:<24} {'?':<9} {'defekt':<8} — {r.get('why', 'nicht lesbar')}")
         unhealthy += 1
         continue
     a = (r.get("agent") or "?")[:23]

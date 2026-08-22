@@ -6,6 +6,30 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.25.0
+
+**A broken fleet report now says why, and a broken one is never published.**
+
+The first production `agent-mesh fleet` showed one agent as `defekt` with no
+further explanation — which is the same failure this tool was built to end:
+a statement you cannot act on. Two changes:
+
+- `fleet` now prints the file size, the parser error and the first 60
+  characters of an unreadable report. "41 B, JSONDecodeError: ℹ️ irgendeine
+  Meldung" identifies the cause in one line.
+- `sync` writes the report to a temporary file, validates that it parses, and
+  only then publishes it. A half-written or polluted report made a healthy
+  agent look broken in the overview; now the agent says so locally instead and
+  keeps its last good report.
+
+If an agent shows as `defekt`, look at it directly:
+
+```bash
+agent-mesh report --json | head -5
+```
+
+Anything before the opening `{` is the cause.
+
 ## v1.24.0
 
 **Fleet overview: `agent-mesh fleet`.**
