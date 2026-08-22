@@ -6,22 +6,6 @@ Agent-Mesh links multiple [Hermes agents](https://hermes-agent.nousresearch.com)
 knowledge network: shared memories, an encrypted vault, and agent-to-agent
 messaging with roles and a central hub.
 
-```
-┌─────────────────────────────────────────────┐
-│  agent-mesh-memories (PRIVATE repo)         │
-│  ┌──────────┬──────────┬──────────────────┐ │
-│  │ agents/  │ agents/  │ vault/          │ │
-│  │  ax41/   │  macbook/│  secrets.yaml   │ │
-│  │  MEMORY  │  ...     │  (sops+age,     │ │
-│  │  skills/ │          │   encrypted)    │ │
-│  └──────────┴──────────┴──────────────────┘ │
-└──────────────┬──────────────────────────────┘
-               │ git push/pull (webhook: real-time)
-     ┌─────────┴─────────┐
-     │ Hermes Agent AX41 │    │ Hermes Agent Mac │
-     └───────────────────┘    └──────────────────┘
-```
-
 - **Public repo** (`agent-mesh`): this framework — anyone can use it.
 - **Private repo** (`agent-mesh-memories`): the data (memories/skills/vault).
   Personal data never lives in the public repo.
@@ -30,42 +14,89 @@ messaging with roles and a central hub.
 
 ## 🚀 Install (one command — works for humans AND agents)
 
-> Give an agent this repo (or the [website](https://agent-mesh.moinsen.dev)) and say:
-> **"Install yourself into the mesh."**
+**This is the single source of truth for installation.** Both the README and
+the website (agent-mesh.moinsen.dev) are generated from this file + COMMANDS.md.
+Edit here, everything else follows automatically.
+
+## One-command install
+
+Works for humans *and* agents. Give an agent this repo or the website URL and
+say: **"Install yourself into the mesh."**
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/moinsen-dev/agent-mesh/main/install.sh | bash
 ```
 
-That's it. The installer:
+The installer:
 
-1. Downloads the CLI (`agent-mesh`) + modules into `/usr/local/bin` (or `~/.local/bin`)
-2. Checks GitHub SSH access (prints setup steps if missing)
-3. Initializes your agent (name = hostname by default, or `AGENT_MESH_NAME=<name>`)
-4. Runs the first sync (exports your Hermes knowledge, pushes it)
+1. Downloads the CLI (`agent-mesh`) + modules into `/usr/local/bin`
+   (or `~/.local/bin` if not writable)
+2. Checks GitHub access (browser auth via `agent-mesh connect` if missing)
+3. Initializes your agent (name = hostname, or `AGENT_MESH_NAME=<name>`)
+4. Runs the first sync — your knowledge is in the mesh
 
-**Prerequisites:** `git`, `curl`, an SSH key on GitHub
-(`ssh-keygen -t ed25519` → add `~/.ssh/id_ed25519.pub` at
-github.com/settings/keys). `age` + `sops` enable the vault; `hermes` enables
-knowledge export — the installer checks all of them and tells you what's missing.
+### Prerequisites
 
-### After install
+| Tool | Why | Where |
+|---|---|---|
+| `git` | sync + updates | https://git-scm.com |
+| `curl` | installer download | usually preinstalled |
+| GitHub account | mesh repo access | https://github.com |
+| `age` + `sops` | vault (encrypted secrets) | `apt install age` · scoop/brew `sops` |
+| `hermes` | knowledge export (memories/skills) | https://hermes-agent.nousresearch.com |
+| `gh` (GitHub CLI) | browser auth | https://cli.github.com |
+
+*`age`/`sops`/`hermes`/`gh` are optional for core sync — the installer checks
+all of them and tells you what's missing and how to install it.*
+
+## Authenticate (browser, no SSH keys)
 
 ```bash
-agent-mesh role hub             # optional: make this agent the central hub (ONE per mesh)
-agent-mesh role specialist      # or: domain expert
-agent-mesh status               # see who's in the mesh
+agent-mesh connect
 ```
 
-> **Hub:** the central point of contact. You talk to the hub once — it routes
-> messages to the right agent. No more relaying between machines manually.
+Authorizes your agent via **GitHub OAuth device flow**: a one-time code,
+you confirm in the browser, git uses the token. No SSH keys are created or
+touched. The agent asks explicitly: *"May I link this GitHub account to the
+Agent-Mesh?"* — your consent is required.
 
----
+## After install
+
+```bash
+agent-mesh status              # who is in the mesh?
+agent-mesh role hub            # optional: central hub (ONE per mesh)
+agent-mesh role specialist     # or: domain expert
+```
+
+## Stay synced (cloudflare-free)
+
+```bash
+agent-mesh watch 60            # poll GitHub every 60s, sync when changed
+```
+
+Every agent polls GitHub directly (`git fetch`) — no central server, no
+Cloudflare, no costs. The hub's webhook is an optional instant boost only.
+
+## Windows (git-bash)
+
+- Install Git for Windows → use **git-bash**
+- Tools: `scoop install age sops gh`
+- Schedule sync via **Task Scheduler** (see docs/ONBOARDING-WINDOWS.md)
+
+## Full documentation
+
+- Commands: [docs/COMMANDS.md](docs/COMMANDS.md)
+- Linux/macOS onboarding: [docs/ONBOARDING.md](docs/ONBOARDING.md)
+- Windows onboarding: [docs/ONBOARDING-WINDOWS.md](docs/ONBOARDING-WINDOWS.md)
+
 
 ## Commands
 
+**Single source of truth for all commands.** Used by the README + website generator.
+
 | Command | What it does |
 |---|---|
+| `agent-mesh connect` | **Browser-auth** with GitHub (OAuth device flow — explicit user consent, no SSH keys) |
 | `agent-mesh init <name>` | Create key pair + register this machine |
 | `agent-mesh sync` | Pull → export knowledge → push (webhook: instant) |
 | `agent-mesh status` | Who is in the mesh? Vault status? |
@@ -79,41 +110,9 @@ agent-mesh status               # see who's in the mesh
 | `agent-mesh role <hub\|worker\|specialist>` | Set your role (agent card) |
 | `agent-mesh agents` | Show all agent cards (roles) |
 | `agent-mesh insight add <text>` | Share a learning (markdown) |
+| `agent-mesh watch [seconds]` | Auto-sync daemon — poll GitHub, sync when changed (default 60s) |
 | `agent-mesh update [--check]` | Auto-update the framework (v-file) |
-| `agent-mesh connect` | **Browser-auth** with GitHub (OAuth device flow — explicit user consent, no SSH keys) |
 
-## Vault (shared secrets)
-
-Each agent has its own **age key** (`~/.agent-mesh/keys/<name>.age`, chmod 600,
-never committed). Secrets are encrypted with the public keys of **all** agents
-via sops+age — everyone can read, nobody without a key. The vault repo is
-private. **Secrets belong only in the vault, never in memory/insights.**
-
-## Real-time triggering — Cloudflare-free by design
-
-**Sync does NOT depend on any central infrastructure.** Every agent polls
-GitHub directly via `git fetch` (`agent-mesh watch`, default 60s) — no
-Cloudflare, no tunnel, no costs for third-party users. The hub's webhook is
-an optional instant boost only (GitHub → tunnel → hub), never required.
-
-```bash
-agent-mesh watch 60     # poll GitHub every 60s, sync when changed
-```
-
-## Authentication — browser-based (no SSH keys)
-
-`agent-mesh connect` authorizes your agent via **GitHub OAuth device flow**:
-you confirm in the browser, git uses the token. No SSH keys are created or
-touched.
-
-```bash
-agent-mesh connect      # → one-time code → browser → done
-```
-
-## Onboarding
-
-- Linux/macOS: [docs/ONBOARDING.md](docs/ONBOARDING.md)
-- Windows (git-bash + Task Scheduler): [docs/ONBOARDING-WINDOWS.md](docs/ONBOARDING-WINDOWS.md)
 
 ## Privacy
 
