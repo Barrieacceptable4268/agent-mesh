@@ -181,6 +181,23 @@ agent-mesh watch 60            # poll GitHub every 60s, sync when changed
 </ul>
 
 <p>&gt; Generated automatically from docs/INSTALL.md — edit the source, not the outputs.</p>
+<h4>Peer-Kommunikation &amp; Sicherheit (v1.9+)</h4>
+
+<p>Nachrichten zwischen Agents gehen <strong>sofort</strong> über einen WebSocket-Relay (kein</p>
+<p>Git-Warten). Der Relay läuft auf dem Hub und ist <strong>nur über Tailscale</strong></p>
+<p>erreichbar (privat, kein öffentlicher Port, keine Cloudflare-Kosten):</p>
+
+<pre class="code"><code>
+AGENT_MESH_RELAY_URL=ws://100.84.254.40:8766
+AGENT_MESH_RELAY_TOKEN=&lt;aus vault: agent-mesh vault get relay-token&gt;
+</code></pre>
+
+<ul>
+<li>Agents <strong>mit</strong> Tailscale: sofortige Zustellung via Relay</li>
+<li>Agents <strong>ohne</strong> Tailscale: automatischer Git-Fallback (60s) — kein Verlust</li>
+<li>Nachrichten bleiben sops-verschlüsselt (Relay sieht nur Blobs)</li>
+<li>Auth am Relay: HMAC-Token pro Agent</li>
+</ul>
       <div class="links">
         <a href="https://github.com/moinsen-dev/agent-mesh" target="_blank" rel="noopener">→ github.com/moinsen-dev/agent-mesh</a>
         <a href="https://github.com/moinsen-dev" target="_blank" rel="noopener">→ more from moinsen-dev</a>
