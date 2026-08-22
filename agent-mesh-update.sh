@@ -48,9 +48,15 @@ install_framework() {
            "$src"/mesh "$src"/mesh-*.sh "$src"/mesh-*.py; do
     [ -f "$f" ] || continue
     local base; base=$(basename "$f")
-    cp "$f" "$dst/$base" && chmod +x "$dst/$base" 2>/dev/null
-    echo "  ✓ $base → $dst/$base"
-    copied=$((copied+1))
+    # ATOMARER Tausch (hermes-hetzner-Fund, v1.10.1): erst in Temp-Datei
+    # schreiben, dann mv — vermeidet das "sich selbst überschreibende
+    # Bash-Skript" (Byte-Offset-Problem → kosmetische Syntaxfehler im Log).
+    local tmp; tmp="$dst/.$base.tmp.$$"
+    if cp "$f" "$tmp" && chmod +x "$tmp" 2>/dev/null; then
+      mv -f "$tmp" "$dst/$base" 2>/dev/null || { rm -f "$tmp"; cp "$f" "$dst/$base"; chmod +x "$dst/$base" 2>/dev/null; }
+      echo "  ✓ $base → $dst/$base"
+      copied=$((copied+1))
+    fi
   done
   if [ "$copied" -eq 0 ]; then
     echo "  ⚠️  Keine Framework-Dateien gefunden in $src — Update unvollständig!"
