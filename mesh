@@ -31,6 +31,10 @@ PRIVATE_REPO="agent-mesh-memories"
 MEMORIES_DIR="$MESH_HOME/memories"          # Klon des privaten Repos
 FRAMEWORK_DIR="$MESH_HOME/framework"        # Klon des public Repos
 
+# A2A-Modul (Agent-to-Agent, Rollen, Hub-Routing) einbinden
+A2A_MODULE="$(dirname "$(readlink -f "$0")")/mesh-a2a.sh"
+[ -f "$A2A_MODULE" ] && source "$A2A_MODULE"
+
 die() { echo "❌ $*" >&2; exit 1; }
 info() { echo "ℹ️  $*"; }
 
@@ -292,6 +296,12 @@ main() {
 case "${1:-}" in
   init)    shift; cmd_init "$@" ;;
   sync)    shift; cmd_sync ;;
+  send)    shift; cmd_send "$@" ;;
+  reply)   shift; cmd_reply "$@" ;;
+  inbox)   shift; cmd_inbox ;;
+  route)   shift; cmd_route "$@" ;;
+  role)    shift; cmd_role "$@" ;;
+  agents)  shift; cmd_agents ;;
   vault)   shift
            local sub="${1:-}"
            shift 2>/dev/null || true
@@ -304,7 +314,7 @@ case "${1:-}" in
            esac ;;
   insight) shift; cmd_insight "$@" ;;
   status)  shift; cmd_status ;;
-  *) echo "Usage: mesh {init|sync|vault|insight|status}" >&2; exit 1 ;;
+  *) echo "Usage: mesh {init|sync|send|reply|inbox|route|role|agents|vault|insight|status}" >&2; exit 1 ;;
 esac
 }
 main "$@"
