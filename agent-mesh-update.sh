@@ -87,32 +87,58 @@ install_framework() {
     dst="$HOME/.local/bin"
     mkdir -p "$dst"
   fi
-  # ZUKUNFTSSICHER: Wildcard-basiert statt fester Dateiliste!
-  # Matcht agent-mesh, agent-mesh-*.sh, agent-mesh-*.py (und Legacy mesh* für
-  # Alt-Installationen). Verhindert den Chicken-Egg-Bug: alte Update-Module
-  # mit alten Namen kopieren nichts, neue Dateien werden automatisch mitgenommen.
-  local copied=0
-  # .js gehoerte bis v1.12 NICHT dazu — das Dashboard wurde vom Update nie
-  # verteilt. Ein Fix daran kam auf dem Hub schlicht nicht an, obwohl "update"
-  # Erfolg meldete. Deshalb hier mit aufgenommen.
-  for f in "$src"/agent-mesh "$src"/agent-mesh-*.sh "$src"/agent-mesh-*.py \
-           "$src"/agent-mesh-*.js \
-           "$src"/mesh "$src"/mesh-*.sh "$src"/mesh-*.py "$src"/mesh-*.js; do
+
+  # ── Rekursive Suche statt Wurzel-Globs (Vorbereitung auf v2) ──
+  # Bisher wurden nur Dateien DIREKT im Repo-Wurzelverzeichnis gefunden. Zieht
+  # der Quellbaum nach bin/ lib/ web/ um, findet eine alte Kopierschleife dort
+  # nichts mehr — und weil beim Update immer noch die ALTE Schleife läuft,
+  # bliebe die Flotte auf dem Stand davor stehen. Genau diese Falle hatten wir
+  # schon bei .js. Deshalb muss diese Version EINE RELEASE FRÜHER ausgerollt
+  # sein als der Umzug selbst.
+  #
+  # Das INSTALLIERTE Layout bleibt bewusst flach: das Hauptskript sucht seine
+  # Module über dirname "$0" gleich neben sich. Nur das Repo wird strukturiert.
+  local copied=0 collisions=0
+  local seen_list=""
+  local f base tmp
+
+  while IFS= read -r f; do
     [ -f "$f" ] || continue
-    local base; base=$(basename "$f")
-    # ATOMARER Tausch (hermes-hetzner-Fund, v1.10.1): erst in Temp-Datei
-    # schreiben, dann mv — vermeidet das "sich selbst überschreibende
-    # Bash-Skript" (Byte-Offset-Problem → kosmetische Syntaxfehler im Log).
-    local tmp; tmp="$dst/.$base.tmp.$$"
+    base=$(basename "$f")
+
+    # Doppelte Basisnamen aus verschiedenen Verzeichnissen wären ein stiller
+    # Überschreib-Unfall — lieber laut melden und den zweiten auslassen.
+    case " $seen_list " in
+      *" $base "*)
+        echo "  ⚠️  '$base' kommt mehrfach vor — '$f' übersprungen"
+        collisions=$((collisions+1))
+        continue ;;
+    esac
+    seen_list="$seen_list $base"
+
+    # ATOMARER Tausch (hermes-hetzner-Fund, v1.10.1): erst Temp-Datei, dann mv
+    # — sonst überschreibt sich ein laufendes Bash-Skript selbst.
+    tmp="$dst/.$base.tmp.$$"
     if cp "$f" "$tmp" && chmod +x "$tmp" 2>/dev/null; then
-      mv -f "$tmp" "$dst/$base" 2>/dev/null || { rm -f "$tmp"; cp "$f" "$dst/$base"; chmod +x "$dst/$base" 2>/dev/null; }
+      mv -f "$tmp" "$dst/$base" 2>/dev/null \
+        || { rm -f "$tmp"; cp "$f" "$dst/$base"; chmod +x "$dst/$base" 2>/dev/null; }
       echo "  ✓ $base → $dst/$base"
       copied=$((copied+1))
     fi
-  done
+  done << FIND_EOF
+$(find "$src" \
+    \( -name .git -o -name docs -o -name site -o -name .github \
+       -o -name node_modules -o -name tests \) -prune -o \
+    -type f \( -name 'agent-mesh' -o -name 'agent-mesh-*.sh' \
+                -o -name 'agent-mesh-*.py' -o -name 'agent-mesh-*.js' \
+                -o -name 'mesh' -o -name 'mesh-*.sh' \
+                -o -name 'mesh-*.py' -o -name 'mesh-*.js' \) -print 2>/dev/null | sort)
+FIND_EOF
+
   if [ "$copied" -eq 0 ]; then
     echo "  ⚠️  Keine Framework-Dateien gefunden in $src — Update unvollständig!"
   fi
+  [ "$collisions" -gt 0 ] && echo "  ⚠️  $collisions Namenskollision(en) — bitte im Repo bereinigen"
   # Verlinken, falls $HOME/.local/bin nicht im PATH (Linux)
   if [ "$dst" = "$HOME/.local/bin" ] && ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
     echo "⚠  Füge ~/.local/bin zum PATH hinzu (oder nutze: $dst/agent-mesh)"

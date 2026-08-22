@@ -6,6 +6,35 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.19.0
+
+**Preparation for the v2 source layout — nothing to do, but it has to land
+before the files move.**
+
+`install_framework` searched only the repository root. Once sources move into
+`bin/`, `lib/` and `web/`, an old copy loop would find nothing there — and
+since an update always runs the *previous* version's loop, the fleet would
+stop at the release before the move. Exactly the trap that already caught
+`.js` files once.
+
+So this release makes the search recursive while **nothing has moved yet**.
+Every agent has to be on v1.19.0 or later before the restructure ships.
+
+The *installed* layout stays flat: the main script finds its modules next to
+itself via `dirname "$0"`, and that stays true. Only the repository gets
+structured.
+
+Verified: the current flat tree and a simulated `bin/ lib/ web/ share/` tree
+produce an identical list of 14 installed files, `.github/scripts/check.sh`
+and a stray `.sh` under `docs/` are correctly ignored, the result runs and
+resolves its modules, and two files sharing a basename are reported instead
+of silently overwriting each other.
+
+Also fixed here: the v1.13.0 instructions told you to copy
+`agent-mesh-relay.service` from `/usr/local/bin`, where it never was —
+`.service` files are not installed by the updater. It now points at the
+framework clone.
+
 ## v1.18.1
 
 Fixes a dashboard bug the new CI gate found on its first run: the relay status
@@ -218,7 +247,7 @@ does not matter.
 The relay now needs read access to the key registry instead of a token:
 
 ```bash
-sudo cp /usr/local/bin/agent-mesh-relay.service /etc/systemd/system/
+sudo cp ~/.agent-mesh/framework/agent-mesh-relay.service /etc/systemd/system/
 sudo rm -f /etc/agent-mesh/relay.env          # held nothing but the old token
 sudo systemctl daemon-reload
 sudo systemctl restart agent-mesh-relay
