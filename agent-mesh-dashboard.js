@@ -2,7 +2,7 @@
 /**
  * agent-mesh-dashboard — zentrale Übersicht für alle Mesh-User.
  *
- * Eine URL (mesh-console.moinsen.dev), sicherer Login (Passwort), Live-Daten:
+ * Eine URL (mesh-console.moinsen.dev), GitHub-OAuth-Login, Live-Daten:
  *   - Agents (vom Relay: online/offline, Version)
  *   - Vault-Status (Secrets, Empfänger)
  *   - Offene Issues (GitHub)
@@ -24,44 +24,77 @@ const { execFileSync, execSync } = require("child_process");
 
 const PORT = parseInt(process.env.DASHBOARD_PORT || "8770", 10);
 const HOST = process.env.DASHBOARD_HOST || "127.0.0.1";
-const PASSWORD_HASH = process.env.DASHBOARD_PASSWORD_HASH || ""; // scrypt-Hash
+const GITHUB_CLIENT_ID = process.env.DASHBOARD_GITHUB_CLIENT_ID || "";
+const GITHUB_CLIENT_SECRET = process.env.DASHBOARD_GITHUB_CLIENT_SECRET || "";
+const GITHUB_REDIRECT = process.env.DASHBOARD_GITHUB_REDIRECT || "https://mesh-console.moinsen.dev/callback";
+const ALLOWED_USERS = (process.env.DASHBOARD_ALLOWED_USERS || "").split(",").map(s => s.trim()).filter(Boolean);
+const GH_ORG = process.env.AGENT_MESH_GH_ORG || "moinsen-dev";
+const GH_MEMBERS_REPO = process.env.DASHBOARD_MEMBERS_REPO || "agent-mesh-memories"; // privates Repo = Mitgliedschaft
+const GH_ADMIN = process.env.DASHBOARD_GH_ADMIN || "udi"; // System-User mit gh-Auth (Collaborator-Check)
 const MEMORIES = process.env.AGENT_MESH_HOME || "/root/.agent-mesh";
 const FRAMEWORK = path.join(MEMORIES, "framework");
 const RELAY_URL = process.env.RELAY_STATUS_URL || "ws://127.0.0.1:8766";
 const SECRET = process.env.DASHBOARD_SECRET || crypto.randomBytes(32).toString("hex");
 
-// ── Passwort-Hash erzeugen: node dashboard.js --hash <passwort> ──
-if (process.argv[2] === "--hash") {
-  const salt = crypto.randomBytes(16).toString("hex");
-  const hash = crypto.scryptSync(process.argv[3], salt, 64).toString("hex");
-  console.log(`DASHBOARD_PASSWORD_HASH=salt:${salt}:${hash}`);
-  process.exit(0);
-}
-
-if (!PASSWORD_HASH) {
-  console.error("❌ DASHBOARD_PASSWORD_HASH fehlt — erzeugen: node dashboard.js --hash <passwort>");
+if (!GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET) {
+  console.error("❌ DASHBOARD_GITHUB_CLIENT_ID / _SECRET fehlen — GitHub OAuth App anlegen: https://github.com/settings/developers");
+  console.error("   Callback-URL: " + GITHUB_REDIRECT);
   process.exit(1);
 }
 
-const sessions = new Map(); // token → expiry
+const sessions = new Map(); // token → {expiry, user}
 
-function verifyPassword(pw) {
+function verifyGitHubUser(login) {
+  // 1. Explizite Allowlist (falls gesetzt — hat Vorrang)
+  if (ALLOWED_USERS.length > 0) return ALLOWED_USERS.includes(login);
+  // 2. Dynamisch — Mesh-Mitglied = Zugriff aufs private Repo:
+  //    a) Org-Member (moinsen-dev) ODER
+  //    b) Repo-Collaborator (agent-mesh-memories)
   try {
-    // Format: salt:<salt>:<hash> (3 Teile!)
-    const parts = PASSWORD_HASH.split(":");
-    const salt = parts[1];
-    const hash = parts[2];
-    const test = crypto.scryptSync(pw, salt, 64).toString("hex");
-    return crypto.timingSafeEqual(Buffer.from(hash, "hex"), Buffer.from(test, "hex"));
-  } catch { return false; }
+    const out = execFileSync("sudo", ["-u", GH_ADMIN, "gh", "api",
+      `orgs/${GH_ORG}/memberships/${login}`, "--jq", ".state"],
+      { timeout: 10, stdio: ["ignore", "pipe", "ignore"] });
+    if (out.toString().trim() === "active") return true;
+  } catch { /* kein Org-Member → weiter prüfen */ }
+  try {
+    const out = execFileSync("sudo", ["-u", GH_ADMIN, "gh", "api",
+      `repos/${GH_ORG}/${GH_MEMBERS_REPO}/collaborators/${login}`,
+      "--jq", ".login"], { timeout: 10, stdio: ["ignore", "pipe", "ignore"] });
+    return out.toString().trim().length > 0;
+  } catch {
+    return false; // 404 = kein Zugriff
+  }
 }
 
 function requireAuth(req, res) {
   const cookie = (req.headers.cookie || "").match(/mesh_session=([^;]+)/);
-  if (cookie && sessions.get(cookie[1]) > Date.now()) return true;
+  if (cookie && sessions.get(cookie[1]) && sessions.get(cookie[1]).expiry > Date.now()) return true;
   res.writeHead(401, { "Content-Type": "application/json" });
   res.end(JSON.stringify({ error: "unauthorized" }));
   return false;
+}
+
+// ── Kleiner HTTP-Helfer (fetch für Node < 18 ohne global fetch) ──
+function awaitFetch(url, opts = {}) {
+  return new Promise((resolve) => {
+    const lib = url.startsWith("https") ? require("https") : require("http");
+    const u = new URL(url);
+    const req = lib.request({
+      hostname: u.hostname,
+      path: u.pathname + u.search,
+      method: opts.method || "GET",
+      headers: { "Accept": "application/json", ...(opts.headers || {}) },
+    }, (res) => {
+      let body = "";
+      res.on("data", c => body += c);
+      res.on("end", () => {
+        try { resolve(JSON.parse(body)); } catch { resolve(null); }
+      });
+    });
+    req.on("error", () => resolve(null));
+    if (opts.body) req.write(opts.body);
+    req.end();
+  });
 }
 
 // ── Daten sammeln (nur lesend!) ──
@@ -113,24 +146,72 @@ function getRelayStatus(cb) {
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://${req.headers.host}`);
 
-  // ── Auth ──
-  if (url.pathname === "/api/login" && req.method === "POST") {
-    let body = "";
-    req.on("data", c => body += c);
-    req.on("end", () => {
-      try {
-        const { password } = JSON.parse(body);
-        if (verifyPassword(password)) {
-          const token = crypto.randomBytes(24).toString("hex");
-          sessions.set(token, Date.now() + 12 * 3600 * 1000); // 12h
-          res.writeHead(200, { "Set-Cookie": `mesh_session=${token}; HttpOnly; Path=/; Max-Age=43200`, "Content-Type": "application/json" });
-          res.end(JSON.stringify({ ok: true }));
-        } else {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "wrong_password" }));
-        }
-      } catch { res.writeHead(400); res.end(); }
+  // ── Auth: GitHub OAuth (Web Flow) ──
+  if (url.pathname === "/login") {
+    const state = crypto.randomBytes(16).toString("hex");
+    sessions.set("oauth_" + state, { expiry: Date.now() + 10 * 60 * 1000 });
+    const authUrl = "https://github.com/login/oauth/authorize" +
+      `?client_id=${encodeURIComponent(GITHUB_CLIENT_ID)}` +
+      `&redirect_uri=${encodeURIComponent(GITHUB_REDIRECT)}` +
+      "&scope=read:user" +
+      `&state=${state}`;
+    res.writeHead(302, { Location: authUrl });
+    res.end();
+    return;
+  }
+
+  if (url.pathname === "/callback") {
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    if (!code || !state || !sessions.has("oauth_" + state)) {
+      res.writeHead(400, { "Content-Type": "text/plain" });
+      res.end("Ungültiger OAuth-State");
+      return;
+    }
+    sessions.delete("oauth_" + state);
+    // Code gegen Token tauschen
+    const tokenResp = awaitFetch("https://github.com/login/oauth/access_token", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Accept": "application/json" },
+      body: JSON.stringify({
+        client_id: GITHUB_CLIENT_ID,
+        client_secret: GITHUB_CLIENT_SECRET,
+        code,
+        redirect_uri: GITHUB_REDIRECT,
+      }),
     });
+    if (!tokenResp || !tokenResp.access_token) {
+      res.writeHead(401, { "Content-Type": "text/plain" });
+      res.end("OAuth-Token-Austausch fehlgeschlagen");
+      return;
+    }
+    // User-Info holen
+    const userResp = awaitFetch("https://api.github.com/user", {
+      headers: { "Authorization": "Bearer " + tokenResp.access_token, "User-Agent": "agent-mesh-dashboard" },
+    });
+    const login = userResp && userResp.login ? userResp.login : "";
+    if (!login || !verifyGitHubUser(login)) {
+      res.writeHead(403, { "Content-Type": "text/html" });
+      res.end("<html><body style='font-family:sans-serif;background:#0b0d12;color:#e6e9f0;display:flex;justify-content:center;align-items:center;height:100vh'><div style='text-align:center'><h1>🚫 Zugriff verweigert</h1><p>GitHub-User <b>" + login + "</b> ist kein Mesh-Mitglied.</p><a href='/login' style='color:#6c8cff'>Erneut versuchen</a></div></body></html>");
+      return;
+    }
+    // Session erstellen (12h)
+    const token = crypto.randomBytes(24).toString("hex");
+    sessions.set(token, { expiry: Date.now() + 12 * 3600 * 1000, user: login });
+    res.writeHead(302, {
+      "Location": "/",
+      "Set-Cookie": `mesh_session=${token}; HttpOnly; Path=/; Max-Age=43200; SameSite=Lax`,
+    });
+    res.end();
+    return;
+  }
+
+  if (url.pathname === "/api/me") {
+    if (!requireAuth(req, res)) return;
+    const cookie = (req.headers.cookie || "").match(/mesh_session=([^;]+)/);
+    const sess = cookie ? sessions.get(cookie[1]) : null;
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ user: sess ? sess.user : null }));
     return;
   }
 
@@ -202,7 +283,7 @@ function renderHtml() {
 <body>
 <div class="container" id="app">
   <h1>🐝 agent-mesh-dashboard</h1>
-  <div class="sub">Live-Übersicht des Mesh-Verbunds · <span id="ver">…</span></div>
+  <div class="sub">Live-Übersicht des Mesh-Verbunds · <span id="ver">…</span> · <span id="who"></span></div>
   <div id="content" style="display:none">
     <div class="status-line">Relay: <span id="relay">…</span></div>
     <div class="grid">
@@ -212,10 +293,9 @@ function renderHtml() {
   </div>
 </div>
 <div id="login" style="display:none">
-  <h1>🔐 Agent-Mesh</h1>
-  <div class="sub">Bitte einloggen</div>
-  <input type="password" id="pw" placeholder="Passwort">
-  <button onclick="login()">Login</button>
+  <h1>🐝 agent-mesh-dashboard</h1>
+  <div class="sub">Mit GitHub anmelden (nur Mesh-Mitglieder)</div>
+  <a href="/login"><button style="width:100%;background:#24292f;color:#fff;padding:12px;border-radius:8px;border:none;cursor:pointer;font-size:15px;display:flex;align-items:center;justify-content:center;gap:8px">🔑 Mit GitHub anmelden</button></a>
   <div class="err" id="err"></div>
 </div>
 <script>
@@ -227,6 +307,11 @@ async function load() {
     document.getElementById('content').style.display = 'block';
     document.getElementById('login').style.display = 'none';
     document.getElementById('ver').textContent = 'Framework v' + (d.version || '?');
+    // Wer ist eingeloggt?
+    try {
+      const me = await (await fetch('/api/me')).json();
+      document.getElementById('who').textContent = '👤 ' + (me.user || '?');
+    } catch {}
     // Relay
     const rl = document.getElementById('relay');
     rl.innerHTML = d.relay && d.relay.active ? '<span class="badge ok">● aktiv (Port 8766)</span>' : '<span class="badge bad">● offline</span>';
@@ -250,11 +335,6 @@ async function load() {
       cm.appendChild(div);
     });
   } catch { setTimeout(load, 3000); }
-}
-async function login() {
-  const r = await fetch('/api/login', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({password: document.getElementById('pw').value}) });
-  if (r.ok) { document.getElementById('err').textContent=''; load(); }
-  else document.getElementById('err').textContent = 'Falsches Passwort';
 }
 function showLogin() { document.getElementById('content').style.display='none'; document.getElementById('login').style.display='block'; }
 load();
