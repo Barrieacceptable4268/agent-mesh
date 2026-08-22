@@ -158,7 +158,7 @@ function getRelayStatus(cb) {
     } catch {}
     // Online-Agents: über die Relay-API? Relay hat keine HTTP-API — lese systemd-Status
     let active = false;
-    try { active = execFileSync("systemctl", ["is-active", "agent-mesh-relay"], { timeout: 3 }).toString().trim() === "active"; } catch {}
+    try { active = execFileSync("systemctl", ["is-active", "agent-mesh-relay"], { timeout: 3000 }).toString().trim() === "active"; } catch {}
     cb({ active, port: stats === "1" });
   } catch { cb(null); }
 }

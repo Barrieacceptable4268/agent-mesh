@@ -6,6 +6,13 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.18.1
+
+Fixes a dashboard bug the new CI gate found on its first run: the relay status
+check used `{ timeout: 3 }` — three **milliseconds**. It always timed out, so
+the dashboard reported the relay as offline no matter what it was doing. Now
+3000. Nothing to do beyond deploying the dashboard file.
+
 ## v1.18.0
 
 **Configuration can live in the conf file now — nothing to do.**
