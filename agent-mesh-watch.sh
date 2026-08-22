@@ -90,6 +90,9 @@ while true; do
       # Inbox anzeigen, falls Nachrichten da sind
       INBOX=$("$BIN" inbox 2>/dev/null | grep -c "──" || true)
       [ "${INBOX:-0}" -gt 0 ] && log "📬 $INBOX Nachricht(en) in der Mailbox (agent-mesh inbox)"
+      # Auto-Respond: neue Nachrichten beantworten (Swarm-Intelligenz!)
+      "$BIN" respond >> "$AGENT_MESH_HOME/watch.log" 2>&1 \
+        || log "⚠️  Auto-Respond meldete Fehler (Log: $AGENT_MESH_HOME/watch.log)"
     fi
   fi
   sleep "$INTERVAL"

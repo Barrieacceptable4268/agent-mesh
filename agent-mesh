@@ -46,6 +46,9 @@ CONNECT_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-connect.sh"
 # Doctor-Modul (Preflight-Checks: Vault, Netz, Abhängigkeiten)
 DOCTOR_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-doctor.sh"
 [ -f "$DOCTOR_MODULE" ] && source "$DOCTOR_MODULE"
+# Responder-Modul (Auto-Antworten auf eingehende Nachrichten)
+RESPONDER_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-responder.sh"
+[ -f "$RESPONDER_MODULE" ] && source "$RESPONDER_MODULE"
 
 die() { echo "❌ $*" >&2; exit 1; }
 info() { echo "ℹ️  $*"; }
@@ -483,6 +486,7 @@ case "${1:-}" in
   watch)   shift; cmd_watch "$@" ;;
   connect) shift; cmd_connect "$@" ;;
   doctor)  shift; cmd_doctor "$@" ;;
+  respond) shift; cmd_respond "$@" ;;
   update)  shift; cmd_update "$@" ;;
   status)  shift; cmd_status ;;
   *) echo "Usage: agent-mesh {init|sync|send|reply|inbox|route|role|agents|vault|insight|watch|connect|update|status}" >&2; exit 1 ;;
