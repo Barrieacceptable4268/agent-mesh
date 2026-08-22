@@ -44,11 +44,11 @@ info() { echo "ℹ️  $*"; }
 # ─────────────────────────── Konfiguration ───────────────────────────
 load_conf() {
   [ -f "$CONF" ] || die "Nicht initialisiert — zuerst: mesh init <agent-name>"
-  AGENT_NAME=$(grep "^AGENT_NAME=" "$CONF" | cut -d= -f2-)
-  AGE_PUB=$(grep "^AGE_PUB=" "$CONF" | cut -d= -f2-)
+  AGENT_NAME=$(grep "^AGENT_NAME=" "$CONF" | cut -d= -f2- || true)
+  AGE_PUB=$(grep "^AGE_PUB=" "$CONF" | cut -d= -f2- || true)
   AGE_KEY_FILE="$AGENT_MESH_HOME/keys/$AGENT_NAME.age"
   # Optional: SSH-Key für Git-Operationen (wenn Agent als anderer User läuft)
-  SSH_LINE=$(grep "^GIT_SSH_COMMAND=" "$CONF" | cut -d= -f2-)
+  SSH_LINE=$(grep "^GIT_SSH_COMMAND=" "$CONF" | cut -d= -f2- || true)
   if [ -n "$SSH_LINE" ]; then
     export GIT_SSH_COMMAND="$SSH_LINE"
   fi
