@@ -203,6 +203,20 @@ def build_site(install_md: str) -> str:
     th {{ text-align: left; color: var(--accent); font-weight: 600; padding: 8px 12px; border-bottom: 2px solid var(--border); }}
     td {{ padding: 8px 12px; border-bottom: 1px solid var(--border); color: var(--muted); }}
     strong {{ color: var(--text); }}
+    /* ── Borg/Swarm-Hive ── */
+    .hive {{ position: relative; width: 100%; height: 340px; margin: 24px 0 8px; overflow: hidden; }}
+    .hive svg {{ width: 100%; height: 100%; }}
+    .hive .hub {{ fill: none; }}
+    .hive .link {{ stroke: #6c8cff; stroke-width: 1; opacity: 0.55; }}
+    .hive .link.pulse {{ stroke-dasharray: 4 6; animation: flow 3s linear infinite; }}
+    .hive .node-core {{ fill: #12151d; stroke: var(--accent); stroke-width: 1.5; }}
+    .hive .node-core.hub-core {{ fill: #0b0d12; stroke: var(--accent-2); stroke-width: 2; }}
+    .hive .node-label {{ fill: var(--muted); font-family: var(--mono); font-size: 10px; }}
+    .hive .node-label.hub-label {{ fill: var(--accent-2); font-weight: 600; }}
+    @keyframes flow {{ to {{ stroke-dashoffset: -20; }} }}
+    .hive .orb {{ animation: orb 4s ease-in-out infinite; }}
+    @keyframes orb {{ 0%,100% {{ opacity: 0.5; }} 50% {{ opacity: 1; }} }}
+    .hive-note {{ text-align: center; color: var(--muted); font-size: 12px; font-family: var(--mono); margin-bottom: 24px; }}
     .links {{ display: flex; gap: 24px; flex-wrap: wrap; margin-top: 32px; }}
     .links a {{ color: var(--muted); text-decoration: none; font-family: var(--mono); font-size: 14px; transition: color 0.2s; }}
     .links a:hover {{ color: var(--accent); }}
@@ -218,6 +232,38 @@ def build_site(install_md: str) -> str:
   </header>
   <main>
     <div class="container">
+      <div class="hive" aria-label="Agent swarm — one hive mind, many nodes">
+        <svg viewBox="0 0 760 340" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <radialGradient id="hubGlow" cx="50%" cy="50%" r="50%">
+              <stop offset="0%" stop-color="#48d597" stop-opacity="0.35"/>
+              <stop offset="100%" stop-color="#48d597" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+          <!-- Verbindungen (Hub → Nodes) -->
+          <line class="link pulse" x1="380" y1="170" x2="90" y2="70"/>
+          <line class="link pulse" x1="380" y1="170" x2="640" y2="55"/>
+          <line class="link pulse" x1="380" y1="170" x2="660" y2="200"/>
+          <line class="link pulse" x1="380" y1="170" x2="120" y2="250"/>
+          <line class="link" x1="380" y1="170" x2="380" y2="300"/>
+          <line class="link" x1="380" y1="170" x2="200" y2="165"/>
+          <line class="link" x1="380" y1="170" x2="560" y2="170"/>
+          <!-- Hub-Glow -->
+          <circle cx="380" cy="170" r="52" fill="url(#hubGlow)"/>
+          <!-- Hub (Borg-Zentrale) -->
+          <circle class="node-core hub-core" cx="380" cy="170" r="22"/>
+          <text class="node-label hub-label" x="380" y="174" text-anchor="middle">HUB</text>
+          <!-- Nodes (Agenten) -->
+          <g class="orb"><circle class="node-core" cx="90" cy="70" r="13"/><text class="node-label" x="90" y="74" text-anchor="middle">ax41</text></g>
+          <g class="orb"><circle class="node-core" cx="640" cy="55" r="13"/><text class="node-label" x="640" y="59" text-anchor="middle">mac</text></g>
+          <g class="orb"><circle class="node-core" cx="660" cy="200" r="13"/><text class="node-label" x="660" y="204" text-anchor="middle">win1</text></g>
+          <g class="orb"><circle class="node-core" cx="120" cy="250" r="13"/><text class="node-label" x="120" y="254" text-anchor="middle">win2</text></g>
+          <g class="orb"><circle class="node-core" cx="380" cy="300" r="13"/><text class="node-label" x="380" y="304" text-anchor="middle">laptop</text></g>
+          <g class="orb"><circle class="node-core" cx="200" cy="165" r="13"/><text class="node-label" x="200" y="169" text-anchor="middle">serv</text></g>
+          <g class="orb"><circle class="node-core" cx="560" cy="170" r="13"/><text class="node-label" x="560" y="174" text-anchor="middle">dev</text></g>
+        </svg>
+      </div>
+      <div class="hive-note">// one hive mind — each node thinks, all nodes know</div>
       {body}
       <div class="links">
         <a href="https://github.com/moinsen-dev/agent-mesh" target="_blank" rel="noopener">→ github.com/moinsen-dev/agent-mesh</a>
@@ -227,7 +273,7 @@ def build_site(install_md: str) -> str:
   </main>
   <footer>
     <div class="container">
-      <div class="terminal-line">$ agent-mesh status · ax41 [hub] · macbook [worker] · all connected</div>
+      <div class="terminal-line">$ agent-mesh status · ax41 [hub] · all connected</div>
       <div>© <span id="year"></span> moinsen.dev · Hamburg, Germany · Open source · MIT</div>
     </div>
   </footer>
