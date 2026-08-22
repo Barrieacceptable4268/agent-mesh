@@ -1,0 +1,19 @@
+[Unit]
+Description=Agent-Mesh Webhook (Echtzeit-Trigger bei GitHub-Push)
+After=network.target
+
+[Service]
+Type=simple
+# Secret aus agent-mesh.conf lesen (nie hart kodieren)
+EnvironmentFile=/root/.agent-mesh/agent-mesh.conf
+Environment=AGENT_MESH_BIN=/usr/local/bin/mesh
+Environment=AGENT_MESH_WEBHOOK_PORT=8765
+Environment=HOME=/root
+ExecStart=/usr/bin/python3 /opt/agent-mesh-framework/agent-mesh-webhook.py
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

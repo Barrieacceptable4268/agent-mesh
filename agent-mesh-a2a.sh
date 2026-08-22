@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# mesh-a2a — Agent-to-Agent-Kommunikation + Rollen für das Agent-Mesh.
+# agent-mesh-a2a — Agent-to-Agent-Kommunikation + Rollen für das Agent-Mesh.
 #
 # Konzept:
 #   Nachrichten laufen als JSON-Dateien über das PRIVATE Repo (Git-Queue).

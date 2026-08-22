@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""mesh-webhook — Echtzeit-Trigger für das Agent-Mesh.
+"""agent-mesh-webhook — Echtzeit-Trigger für das Agent-Mesh.
 
 Empfängt GitHub-Webhooks (Push auf agent-mesh-memories), verifiziert die
 HMAC-Signatur (X-Hub-Signature-256) gegen ein Secret und stößt sofort
@@ -18,8 +18,8 @@ import subprocess
 import sys
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
-SECRET = os.environ.get("MESH_WEBHOOK_SECRET", "")
-MESH_BIN = os.environ.get("MESH_BIN", "/usr/local/bin/mesh")
+SECRET = os.environ.get("AGENT_MESH_WEBHOOK_SECRET", "")
+AGENT_MESH_BIN = os.environ.get("AGENT_MESH_BIN", "/usr/local/bin/mesh")
 EXPECTED_REPO = "moinsen-dev/agent-mesh-memories"
 
 
@@ -61,8 +61,8 @@ class Handler(BaseHTTPRequestHandler):
 
         # Sofortiger Sync + Inbox (asynchron, blockiert nicht den Webhook)
         subprocess.Popen(
-            [MESH_BIN, "sync"],
-            stdout=open("/var/log/mesh-webhook.log", "a"),
+            [AGENT_MESH_BIN, "sync"],
+            stdout=open("/var/log/agent-mesh-webhook.log", "a"),
             stderr=subprocess.STDOUT,
         )
         self.send_response(200)
@@ -75,19 +75,19 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(b'{"status":"mesh-webhook running"}')
+        self.wfile.write(b'{"status":"agent-mesh-webhook running"}')
 
     def log_message(self, fmt, *args):
-        sys.stderr.write("[mesh-webhook] %s\n" % (fmt % args))
+        sys.stderr.write("[agent-mesh-webhook] %s\n" % (fmt % args))
 
 
 def main():
-    port = int(os.environ.get("MESH_WEBHOOK_PORT", "8765"))
+    port = int(os.environ.get("AGENT_MESH_WEBHOOK_PORT", "8765"))
     if not SECRET:
-        print("❌ MESH_WEBHOOK_SECRET nicht gesetzt", file=sys.stderr)
+        print("❌ AGENT_MESH_WEBHOOK_SECRET nicht gesetzt", file=sys.stderr)
         sys.exit(1)
     server = HTTPServer(("127.0.0.1", port), Handler)
-    print(f"✅ mesh-webhook auf 127.0.0.1:{port} (Secret: {'gesetzt' if SECRET else 'FEHLT'})")
+    print(f"✅ agent-mesh-webhook auf 127.0.0.1:{port} (Secret: {'gesetzt' if SECRET else 'FEHLT'})")
     server.serve_forever()
 
 

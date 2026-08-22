@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# mesh — Agent-Mesh CLI: verbindet mehrere Hermes-Agents zu einem Wissens-Verbund.
+# agent-mesh — Agent-Mesh CLI: verbindet mehrere Hermes-Agents zu einem Wissens-Verbund.
 #
 # Repos:
 #   PUBLIC   <GH_ORG>/agent-mesh          — dieses Framework
 #   PRIVATE  <GH_ORG>/agent-mesh-memories — Memories, Skills, Vault (nie public!)
 #
 # Konzept:
-#   Jeder Rechner hat EINEN Agent (Namen aus mesh.conf). Der Agent exportiert
+#   Jeder Rechner hat EINEN Agent (Namen aus agent-mesh.conf). Der Agent exportiert
 #   sein Hermes-Wissen (MEMORY.md, USER.md, skills/, insights/) in das private
 #   Repo, pullt das Wissen der anderen Agents und teilt Secrets über das
 #   sops+age-Verschlüsselte Vault. Kein Secret liegt jemals im Klartext im Repo.
@@ -23,19 +23,19 @@
 
 set -euo pipefail
 
-MESH_HOME="${MESH_HOME:-$HOME/.hermes-mesh}"
-CONF="$MESH_HOME/mesh.conf"
-GH_ORG="${MESH_GH_ORG:-moinsen-dev}"
+AGENT_MESH_HOME="${AGENT_MESH_HOME:-$HOME/.agent-mesh}"
+CONF="$AGENT_MESH_HOME/agent-mesh.conf"
+GH_ORG="${AGENT_MESH_GH_ORG:-moinsen-dev}"
 PUBLIC_REPO="agent-mesh"
 PRIVATE_REPO="agent-mesh-memories"
-MEMORIES_DIR="$MESH_HOME/memories"          # Klon des privaten Repos
-FRAMEWORK_DIR="$MESH_HOME/framework"        # Klon des public Repos
+MEMORIES_DIR="$AGENT_MESH_HOME/memories"          # Klon des privaten Repos
+FRAMEWORK_DIR="$AGENT_MESH_HOME/framework"        # Klon des public Repos
 
 # A2A-Modul (Agent-to-Agent, Rollen, Hub-Routing) einbinden
-A2A_MODULE="$(dirname "$(readlink -f "$0")")/mesh-a2a.sh"
+A2A_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-a2a.sh"
 [ -f "$A2A_MODULE" ] && source "$A2A_MODULE"
 # Update-Modul einbinden (mesh update / --check / --hermes)
-UPDATE_MODULE="$(dirname "$(readlink -f "$0")")/mesh-update.sh"
+UPDATE_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-update.sh"
 [ -f "$UPDATE_MODULE" ] && source "$UPDATE_MODULE"
 
 die() { echo "❌ $*" >&2; exit 1; }
@@ -46,7 +46,7 @@ load_conf() {
   [ -f "$CONF" ] || die "Nicht initialisiert — zuerst: mesh init <agent-name>"
   AGENT_NAME=$(grep "^AGENT_NAME=" "$CONF" | cut -d= -f2-)
   AGE_PUB=$(grep "^AGE_PUB=" "$CONF" | cut -d= -f2-)
-  AGE_KEY_FILE="$MESH_HOME/keys/$AGENT_NAME.age"
+  AGE_KEY_FILE="$AGENT_MESH_HOME/keys/$AGENT_NAME.age"
   # Optional: SSH-Key für Git-Operationen (wenn Agent als anderer User läuft)
   SSH_LINE=$(grep "^GIT_SSH_COMMAND=" "$CONF" | cut -d= -f2-)
   if [ -n "$SSH_LINE" ]; then
@@ -58,14 +58,14 @@ load_conf() {
 cmd_init() {
   [ $# -ge 1 ] || die "Usage: mesh init <agent-name>"
   local name="$1"
-  [ -f "$CONF" ] && die "Bereits initialisiert ($(grep AGENT_NAME= "$CONF")). Für Neustart: rm -rf $MESH_HOME"
-  mkdir -p "$MESH_HOME/keys" "$MEMORIES_DIR" "$FRAMEWORK_DIR"
+  [ -f "$CONF" ] && die "Bereits initialisiert ($(grep AGENT_NAME= "$CONF")). Für Neustart: rm -rf $AGENT_MESH_HOME"
+  mkdir -p "$AGENT_MESH_HOME/keys" "$MEMORIES_DIR" "$FRAMEWORK_DIR"
 
   # age-Keypaar für diesen Agent
-  age-keygen -o "$MESH_HOME/keys/$name.age" 2>/dev/null
+  age-keygen -o "$AGENT_MESH_HOME/keys/$name.age" 2>/dev/null
   local pub
-  pub=$(age-keygen -y "$MESH_HOME/keys/$name.age")
-  chmod 600 "$MESH_HOME/keys/$name.age"
+  pub=$(age-keygen -y "$AGENT_MESH_HOME/keys/$name.age")
+  chmod 600 "$AGENT_MESH_HOME/keys/$name.age"
 
   cat > "$CONF" << EOF
 # Agent-Mesh Konfiguration (lokal, nie committen)
@@ -88,7 +88,7 @@ EOF
 
   # Public-Key im privaten Repo ablegen (für Vault-Verschlüsselung durch andere)
   echo "$pub" > "$MEMORIES_DIR/vault/keys/$name.age.pub"
-  info "✅ Agent '$name' initialisiert (age-Key: $MESH_HOME/keys/$name.age)"
+  info "✅ Agent '$name' initialisiert (age-Key: $AGENT_MESH_HOME/keys/$name.age)"
   info "   Public-Key registriert: vault/keys/$name.age.pub"
   info "   Nächster Schritt: mesh sync (pusht die Registrierung)"
 }
@@ -249,8 +249,8 @@ cmd_vault_add_key() {
   load_conf
   [ $# -ge 1 ] || die "Usage: mesh vault add-key <agent-name>"
   local agent="$1" pub
-  pub=$(cat "$MESH_HOME/keys/$agent.age" 2>/dev/null | age-keygen -y 2>/dev/null) \
-    || die "Key für '$agent' nicht gefunden: $MESH_HOME/keys/$agent.age"
+  pub=$(cat "$AGENT_MESH_HOME/keys/$agent.age" 2>/dev/null | age-keygen -y 2>/dev/null) \
+    || die "Key für '$agent' nicht gefunden: $AGENT_MESH_HOME/keys/$agent.age"
   # Hinweis: andere Agents müssen ihren Key selbst einspielen — Public-Keys
   # liegen im Repo unter vault/keys/. Zum Neuvorstellen: pub aus Repo lesen
   info "Key-Handling: Public-Keys werden über das Repo geteilt (vault/keys/)."

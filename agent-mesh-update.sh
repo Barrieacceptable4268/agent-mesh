@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# mesh-update — Update-Mechanismus für das Agent-Mesh Framework.
+# agent-mesh-update — Update-Mechanismus für das Agent-Mesh Framework.
 #
 # Läuft als Teil von `mesh update` (eingebunden aus dem Hauptskript):
 #   1. Prüft die aktuelle Version gegen das public Repo (agent-mesh)
