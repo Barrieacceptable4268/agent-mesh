@@ -139,6 +139,39 @@ FIND_EOF
     echo "  ⚠️  Keine Framework-Dateien gefunden in $src — Update unvollständig!"
   fi
   [ "$collisions" -gt 0 ] && echo "  ⚠️  $collisions Namenskollision(en) — bitte im Repo bereinigen"
+
+  # ── Ergebnis prüfen, nicht nur die Handlung melden ──
+  # Dreimal in Folge hat ein Werkzeug hier Erfolg gemeldet, während nichts
+  # ankam: .js wurde nie kopiert, eine zweite Installation überschattete die
+  # frische, ein Dienst zeigte auf den alten Pfad. Der gemeinsame Nenner war
+  # immer, dass niemand nachgesehen hat, ob die Kopie WIRKLICH dort liegt und
+  # ob sie es ist, die aufgerufen wird.
+  INSTALL_DST="$dst"   # für Aufrufer: wohin wurde wirklich installiert
+  local bad=0 f base
+  for f in "$src"/agent-mesh "$src"/agent-mesh-*.sh "$src"/agent-mesh-*.py "$src"/agent-mesh-*.js; do
+    [ -f "$f" ] || continue
+    base=$(basename "$f")
+    if [ ! -f "$dst/$base" ] || ! cmp -s "$f" "$dst/$base"; then
+      echo "  ❌ $base ist NICHT korrekt in $dst angekommen"
+      bad=$((bad+1))
+    fi
+  done
+  if [ "$bad" -gt 0 ]; then
+    echo "  ⚠️  $bad Datei(en) weichen nach dem Kopieren ab — Update NICHT vollständig."
+    echo "     Schreibrechte auf $dst prüfen (ggf. mit sudo wiederholen)."
+  fi
+
+  # Wird auch das aufgerufen, was wir gerade geschrieben haben?
+  local onpath; onpath=$(command -v agent-mesh 2>/dev/null || true)
+  if [ -n "$onpath" ] && [ "$(dirname "$onpath")" != "$dst" ]; then
+    echo "  ⚠️  ACHTUNG: aufgerufen wird $onpath, geschrieben wurde nach $dst/"
+    echo "     Eine ältere Installation überschattet die frische. Entweder die"
+    echo "     alte entfernen oder den PATH/den Dienst auf $dst umbiegen —"
+    echo "     sonst läuft trotz erfolgreichem Update weiter der alte Stand."
+    echo "     Genauer Befund: agent-mesh doctor --security"
+  elif [ "$bad" -eq 0 ] && [ "$copied" -gt 0 ]; then
+    echo "  ✅ $copied Datei(en) verifiziert in $dst"
+  fi
   # Verlinken, falls $HOME/.local/bin nicht im PATH (Linux)
   if [ "$dst" = "$HOME/.local/bin" ] && ! echo "$PATH" | grep -q "$HOME/.local/bin"; then
     echo "⚠  Füge ~/.local/bin zum PATH hinzu (oder nutze: $dst/agent-mesh)"
@@ -336,9 +369,25 @@ cmd_update() {
       systemctl restart mesh-webhook 2>/dev/null && echo "  ✓ mesh-webhook neu gestartet"
     fi
     # Nach Update IMMER sync (legacy watch-only Agents exportieren sonst nie
-    # Signaturschlüssel/Neues — beobachtet am nucbox-Fall, 2026-08-22)
+    # Signaturschlüssel/Neues — beobachtet am nucbox-Fall, 2026-08-22).
+    # Beitrag des ax41-Agenten; zwei Details nachgezogen:
+    #   1. NICHT "agent-mesh sync" über den PATH — das wäre womöglich genau
+    #      die überschattende Alt-Installation, vor der wir oben warnen.
+    #      Aufgerufen wird das, was gerade installiert wurde.
+    #   2. Der Status muss von sync kommen, nicht von tail: hinter einer Pipe
+    #      prüft "|| echo" das LETZTE Glied. Dieselbe Falle wie bei einem
+    #      verify-tag, das den Exit-Code von sed las.
     echo "── Sync nach Update ──"
-    agent-mesh sync 2>&1 | tail -3 || echo "  ⚠️  sync meldete einen Fehler (lässt sich manuell nachholen)"
+    local _self="${INSTALL_DST:-}/agent-mesh"
+    [ -x "$_self" ] || _self=$(command -v agent-mesh 2>/dev/null || echo "")
+    if [ -n "$_self" ] && [ -x "$_self" ]; then
+      local _out _rc
+      _out=$("$_self" sync 2>&1); _rc=$?
+      echo "$_out" | tail -3
+      [ "$_rc" -eq 0 ] || echo "  ⚠️  sync meldete einen Fehler (manuell nachholen: agent-mesh sync)"
+    else
+      echo "  ⚠️  agent-mesh nicht auffindbar — sync bitte manuell nachholen"
+    fi
   fi
 
   # Optional Hermes-Hinweis

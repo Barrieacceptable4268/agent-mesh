@@ -6,6 +6,23 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.20.0
+
+**`update` now checks the result, not just the action.**
+
+Three times during the rollout a tool reported success while nothing arrived:
+`.js` files were never copied, a second installation shadowed the fresh one,
+and a service kept pointing at the old path. The common thread was never a
+wrong copy command — it was that nobody looked afterwards.
+
+After installing, `update` now compares every file it wrote against the
+framework clone and reports any that did not land. It also checks whether the
+`agent-mesh` first on your PATH is the one it just wrote; if an older
+installation shadows it, that is now a loud warning instead of a silent
+mismatch between "update succeeded" and "the old code is still running".
+
+Nothing to do. The next update tells you if it worked.
+
 ## v1.19.3
 
 `doctor --security` claimed releases were unsigned when they were not.
