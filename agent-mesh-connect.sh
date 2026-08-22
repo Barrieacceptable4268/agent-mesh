@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+# agent-mesh-connect — explizite User-Autorisierung per BROWSER-AUTH.
+#
+# Idee (User, 2026-08-22): Der Agent fragt aktiv "Darf ich mich mit deinem
+# GitHub-Account verknüpfen?" — und die Authentifizierung läuft über den
+# BROWSER (OAuth Device-Flow), NICHT über SSH-Keys:
+#
+#   1. gh CLI prüfen (oder installieren)
+#   2. gh auth login --web  →  One-Time-Code + Browser-Bestätigung
+#   3. gh auth setup-git    →  git nutzt den OAuth-Token (https)
+#   4. Zugriff aufs private Mesh-Repo prüfen → fertig
+#
+# Sicherheit:
+#   - KEINE SSH-Keys werden erstellt, gelöscht oder angefasst
+#   - Der User bestätigt explizit im Browser (OAuth-Scope: repo)
+#   - Token liegt in gh's Credential-Store (nie im Klartext im Repo)
+
+set -euo pipefail
+
+AGENT_MESH_HOME="${AGENT_MESH_HOME:-$HOME/.agent-mesh}"
+GH_ORG="${AGENT_MESH_GH_ORG:-moinsen-dev}"
+PRIVATE_REPO="agent-mesh-memories"
+
+die() { echo "❌ $*" >&2; exit 1; }
+info() { echo "ℹ️  $*"; }
+
+cmd_connect() {
+  info "🔐 Agent-Mesh Connect — Browser-Autorisierung mit GitHub"
+  echo ""
+
+  # ── 1. gh CLI prüfen ──
+  if ! command -v gh >/dev/null 2>&1; then
+    die "gh CLI fehlt — bitte installieren: https://cli.github.com (macOS: brew install gh)"
+  fi
+
+  # ── 2. Bereits eingeloggt? ──
+  if gh auth status 2>/dev/null | grep -q "Logged in"; then
+    local who
+    who=$(gh api user --jq .login 2>/dev/null || echo "?")
+    echo "──────────────────────────────────────────────"
+    echo "  Bereits eingeloggt als: $who"
+    echo "──────────────────────────────────────────────"
+    echo ""
+    read -r -p "👉 Darf ich diesen Account mit dem Agent-Mesh verknüpfen? (ja/nein) " answer
+    case "${answer,,}" in
+      j|ja|y|yes|yo) ;;
+      *) die "Abbruch — keine Verknüpfung. Jederzeit möglich: agent-mesh connect" ;;
+    esac
+  else
+    # ── 3. Browser-Login starten (Device-Flow) ──
+    echo "👉 Browser-Login wird gestartet. Du bekommst einen One-Time-Code:"
+    echo ""
+    gh auth login --hostname github.com --git-protocol https --web 2>&1
+    echo ""
+    info "✅ Login abgeschlossen (sofern du im Browser bestätigt hast)"
+  fi
+
+  # ── 4. git auf Token umstellen (https statt ssh) ──
+  info "Konfiguriere git mit dem OAuth-Token…"
+  gh auth setup-git 2>/dev/null || true
+
+  # ── 5. Zugriff aufs private Mesh-Repo prüfen ──
+  info "Prüfe Zugriff auf $GH_ORG/$PRIVATE_REPO…"
+  if gh repo view "$GH_ORG/$PRIVATE_REPO" >/dev/null 2>&1; then
+    local who
+    who=$(gh api user --jq .login 2>/dev/null || echo "?")
+    echo ""
+    echo "✅ Verknüpfung bestätigt!"
+    echo "   Account:  $who"
+    echo "   Repo:     $GH_ORG/$PRIVATE_REPO (Zugriff ✅)"
+    echo ""
+    echo "   Nächste Schritte:"
+    echo "   agent-mesh init <name>    # Agent registrieren"
+    echo "   agent-mesh sync           # Wissen exportieren + pushen"
+    echo "   agent-mesh watch 60       # Auto-Sync (Cloudflare-frei!)"
+  else
+    echo ""
+    die "❌ Kein Zugriff auf $GH_ORG/$PRIVATE_REPO."
+    echo "   Bitte den Repo-Owner bitten, '$who' als Collaborator einzuladen:"
+    echo "   https://github.com/$GH_ORG/$PRIVATE_REPO/settings/access"
+  fi
+}
+
+# Als Befehl aufrufbar (wird aus agent-mesh gesourct — Dispatch dort)

@@ -40,6 +40,9 @@ UPDATE_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-update.sh"
 # Watch-Modul (Polling-Daemon) — nur für `watch`-Dispatch
 WATCH_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-watch.sh"
 [ -f "$WATCH_MODULE" ] && source "$WATCH_MODULE"
+# Connect-Modul (User-Autorisierung: GitHub-Account verknüpfen)
+CONNECT_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-connect.sh"
+[ -f "$CONNECT_MODULE" ] && source "$CONNECT_MODULE"
 
 die() { echo "❌ $*" >&2; exit 1; }
 info() { echo "ℹ️  $*"; }
@@ -320,6 +323,7 @@ case "${1:-}" in
            esac ;;
   insight) shift; cmd_insight "$@" ;;
   watch)   shift; cmd_watch "$@" ;;
+  connect) shift; cmd_connect "$@" ;;
   update)  shift; cmd_update "$@" ;;
   status)  shift; cmd_status ;;
   *) echo "Usage: mesh {init|sync|send|reply|inbox|route|role|agents|vault|insight|update|status}" >&2; exit 1 ;;

@@ -80,6 +80,7 @@ agent-mesh status               # see who's in the mesh
 | `agent-mesh agents` | Show all agent cards (roles) |
 | `agent-mesh insight add <text>` | Share a learning (markdown) |
 | `agent-mesh update [--check]` | Auto-update the framework (v-file) |
+| `agent-mesh connect` | **Browser-auth** with GitHub (OAuth device flow — explicit user consent, no SSH keys) |
 
 ## Vault (shared secrets)
 
@@ -88,12 +89,26 @@ never committed). Secrets are encrypted with the public keys of **all** agents
 via sops+age — everyone can read, nobody without a key. The vault repo is
 private. **Secrets belong only in the vault, never in memory/insights.**
 
-## Real-time triggering
+## Real-time triggering — Cloudflare-free by design
 
-A webhook listener (`agent-mesh-webhook.py`, systemd unit included) makes
-`sync` run **immediately** on every push — no cron waiting. HMAC signature
-verification (X-Hub-Signature-256) protects the endpoint; it binds to
-127.0.0.1 and is exposed only via your tunnel.
+**Sync does NOT depend on any central infrastructure.** Every agent polls
+GitHub directly via `git fetch` (`agent-mesh watch`, default 60s) — no
+Cloudflare, no tunnel, no costs for third-party users. The hub's webhook is
+an optional instant boost only (GitHub → tunnel → hub), never required.
+
+```bash
+agent-mesh watch 60     # poll GitHub every 60s, sync when changed
+```
+
+## Authentication — browser-based (no SSH keys)
+
+`agent-mesh connect` authorizes your agent via **GitHub OAuth device flow**:
+you confirm in the browser, git uses the token. No SSH keys are created or
+touched.
+
+```bash
+agent-mesh connect      # → one-time code → browser → done
+```
 
 ## Onboarding
 
