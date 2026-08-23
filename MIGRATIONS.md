@@ -6,6 +6,53 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.28.0
+
+**Nothing to do by hand.** Every change below takes effect on its own after
+the update.
+
+**A signal is an event, and events get missed.** On 2026-08-22 a maintenance
+broadcast reached four of six agents. The other two were not running at that
+moment, and the signal — valid for 30 minutes, acting exactly once — was gone
+for good. They sat on the old release all night, and the fleet table
+summarised it as "0 reports older than 24h".
+
+`agent-mesh converge` replaces the event with a state. One idempotent pass
+brings this machine to where it should be: desired version installed,
+maintenance signals processed, repository changes taken up, heartbeat
+published. Twice changes nothing; after a night of downtime it catches up on
+the first run. `watch` is now that pass in a loop, and the maintenance signal
+only makes it faster.
+
+Three things follow from that, and they are the reason this is a release of
+its own:
+
+  * **`watch` checks for a new version immediately on start**, not after 60
+    cycles. A cycle counter restarts at zero with the process, so a restarted
+    watcher used to be blind for an hour — exactly when it is most likely to
+    be behind.
+  * **A heartbeat is not a change.** A report whose only difference is its
+    timestamp is no longer published. Before, every sync gave every other
+    agent something to sync, and six agents kept each other permanently busy
+    over nothing. Every agent still refreshes its report at least hourly
+    (`AGENT_MESH_HEARTBEAT`), so silence stays meaningful.
+  * **Silence is now a finding.** `fleet` marks any agent without a sign of
+    life for more than two hours and names it; `doctor` reports a missing
+    watch process instead of merely recording it. An agent nobody hears from
+    receives no updates, no messages and no maintenance signals — and used to
+    look green while doing so.
+
+**The command line explains itself.** `agent-mesh --help`, `agent-mesh
+--version` and `agent-mesh <command> --help` exist, work without a
+configuration, and cover every command including its flags. An unknown
+command suggests the nearest match instead of printing 24 names. Nothing was
+renamed, no flag changed meaning; every previous invocation keeps working.
+
+**And there is a test suite** — `tests/run.sh`, no dependencies, part of CI.
+It also holds together things that used to drift apart in silence: the
+embedded version against `VERSION`, the help against the dispatcher, and the
+download list in `install.sh` against the modules that actually exist.
+
 ## v1.27.0
 
 **`agent-mesh doctor --fix`, and findings that name the file.**

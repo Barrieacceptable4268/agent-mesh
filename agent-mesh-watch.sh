@@ -1,104 +1,217 @@
 #!/usr/bin/env bash
-# agent-mesh-watch — Polling-Daemon: hält den Agent automatisch synchron.
+# agent-mesh-watch — Konvergenz: den Soll-Zustand herstellen, immer wieder.
 #
-# Prüft alle INTERVAL Sekunden, ob sich das private Repo geändert hat
-# (git fetch + log-Check — kein Voll-Sync bei jeder Runde), und stößt
-# nur dann agent-mesh sync an. So bleibt jeder Agent OHNE Zutun aktuell:
-#   - Neue Nachrichten (A2A-Mailbox) kommen in Sekunden/Minuten an
-#   - Wissen/Skills anderer Agents werden übernommen
-#   - Der Hub (Webhook) reagiert sofort; alle anderen via Polling
+# ── Warum das umgebaut wurde ───────────────────────────────────────────────
+# Am 2026-08-22 ging ein Wartungssignal an sechs Agents. Vier zogen nach, zwei
+# nicht: ihr watch-Prozess war am Abend stehengeblieben. Das Signal gilt 30
+# Minuten und wirkt genau einmal — wer in diesem Fenster nicht lief, hatte das
+# Release für immer verpasst. Am nächsten Morgen standen beide unverändert da,
+# und niemand wäre darauf gekommen, ausser jemand hätte in die Tabelle gesehen.
+#
+# Ein Signal ist ein EREIGNIS. Ereignisse gehen verloren. Ein Soll-Zustand
+# nicht: er gilt weiter, egal wie lange niemand hingesehen hat.
+#
+#   converge = EIN idempotenter Durchlauf, der herstellt, was gelten soll.
+#
+# Zweimal laufen lassen ändert nichts. Eine durchschlafene Nacht wird beim
+# ersten Aufruf danach aufgeholt. Das Wartungssignal bleibt erhalten — es
+# beschleunigt jetzt nur noch, statt die einzige Zustellung zu sein.
+#
+# Und der Vergleich läuft gegen die LAUFENDE Version, nicht gegen die im
+# Quellklon: "geholt" und "installiert" sind zweierlei, und genau diese
+# Verwechslung hat schon zweimal eine Flotte grün aussehen lassen, während der
+# alte Stand lief.
 #
 # Usage:
-#   agent-mesh watch [interval-sekunden]   # Default 60
-#   agent-mesh watch 300                   # alle 5 Minuten
+#   agent-mesh converge                    ein Durchlauf
+#   agent-mesh watch [interval-sekunden]   Dauerlauf, Default 60
 #
-# Als systemd/Cron/launchd/Task-Scheduler einrichten — läuft dann dauerhaft.
+# Für den Dauerbetrieb ist `agent-mesh service install` vorzuziehen: ein
+# Dienst kommt nach Absturz und Neustart von selbst wieder, eine Schleife im
+# Terminal nicht.
 
 set -euo pipefail
 
-# In Funktion wrappen — beim Sourcen darf NICHTS laufen (nur bei `watch`-Dispatch)
-cmd_watch() {
-# Konfiguration laden (gleiche Logik wie agent-mesh)
-AGENT_MESH_HOME="${AGENT_MESH_HOME:-$HOME/.agent-mesh}"
-CONF="$AGENT_MESH_HOME/agent-mesh.conf"
-MEMORIES_DIR="$AGENT_MESH_HOME/memories"
-FRAMEWORK_DIR="$AGENT_MESH_HOME/framework"
-BIN="${AGENT_MESH_BIN:-$(dirname "$(readlink -f "$0")")/agent-mesh}"
-GH_ORG="${AGENT_MESH_GH_ORG:-moinsen-dev}"
-PUBLIC_REPO="agent-mesh"
+# Beim Sourcen darf NICHTS laufen — nur beim Dispatch von converge/watch.
 
-INTERVAL="${1:-60}"
-# Nur positive Zahlen
-case "$INTERVAL" in
-  *[!0-9]*|'') echo "❌ Intervall muss eine Zahl sein (Sekunden)"; exit 1 ;;
-esac
-# Self-Update-Intervall: alle UPDATE_EVERY Zyklen das Framework prüfen
-# (Default: alle 60 Zyklen → bei 60s-Intervall ≈ stündlich; konfigurierbar)
-UPDATE_EVERY="${AGENT_MESH_UPDATE_EVERY:-60}"
+# Gemeinsame Umgebung für beide Kommandos.
+_converge_env() {
+  AGENT_MESH_HOME="${AGENT_MESH_HOME:-$HOME/.agent-mesh}"
+  CONF="$AGENT_MESH_HOME/agent-mesh.conf"
+  MEMORIES_DIR="$AGENT_MESH_HOME/memories"
+  FRAMEWORK_DIR="$AGENT_MESH_HOME/framework"
+  BIN="${AGENT_MESH_BIN:-$(dirname "$(readlink -f "$0")")/agent-mesh}"
+  GH_ORG="${AGENT_MESH_GH_ORG:-moinsen-dev}"
+  PUBLIC_REPO="${AGENT_MESH_PUBLIC_REPO:-agent-mesh}"
+  LOG="$AGENT_MESH_HOME/watch.log"
 
-[ -f "$CONF" ] || { echo "❌ Nicht initialisiert — zuerst: agent-mesh init <name>"; exit 1; }
-[ -d "$MEMORIES_DIR/.git" ] || { echo "❌ Repo-Klon fehlt — zuerst: agent-mesh sync"; exit 1; }
+  [ -f "$CONF" ] || { echo "❌ Nicht initialisiert — zuerst: agent-mesh init <name>" >&2; return 1; }
+  [ -d "$MEMORIES_DIR/.git" ] || { echo "❌ Repo-Klon fehlt — zuerst: agent-mesh sync" >&2; return 1; }
 
-AGENT_NAME=$(grep "^AGENT_NAME=" "$CONF" | cut -d= -f2- || true)
-# SSH-Key-Option laden (falls gesetzt)
-SSH_LINE=$(grep "^GIT_SSH_COMMAND=" "$CONF" | cut -d= -f2- || true)
-[ -n "$SSH_LINE" ] && export GIT_SSH_COMMAND="$SSH_LINE"
+  AGENT_NAME=$(grep "^AGENT_NAME=" "$CONF" | cut -d= -f2- || true)
+  # SSH-Key-Option laden (falls gesetzt)
+  local ssh_line
+  ssh_line=$(grep "^GIT_SSH_COMMAND=" "$CONF" | cut -d= -f2- || true)
+  [ -n "$ssh_line" ] && export GIT_SSH_COMMAND="$ssh_line"
+  return 0
+}
 
-log() { echo "[$(date -u +%H:%M:%S)] $*"; }
-log "🔄 agent-mesh watch gestartet (Agent: $AGENT_NAME, Intervall: ${INTERVAL}s, Self-Update: alle ${UPDATE_EVERY} Zyklen)"
+# ── Schritt 1: läuft hier die Soll-Version? ────────────────────────────────
+# Massstab ist VERSION auf origin/main des öffentlichen Repos. Installiert
+# wird davon nichts direkt — `update` holt das signierte Tag und prüft es.
+# Hier wird nur entschieden, OB es etwas zu tun gibt.
+#
+# Der Netzabruf wird gedrosselt: eine Zeitmarke statt eines Zykluszählers,
+# damit es keine Rolle spielt, ob converge aus einer Schleife, einem Timer
+# oder von Hand kommt. Ein Zähler fängt nach jedem Neustart bei null an —
+# deshalb hat ein frisch gestarteter watch bisher eine Stunde lang gar nicht
+# nach Updates gesehen.
+CONVERGE_VERSION_EVERY="${AGENT_MESH_VERSION_CHECK_EVERY:-900}"   # Sekunden
 
-# ── Self-Update: Framework vom public Repo prüfen + bei neuer Version updaten ──
-check_framework_update() {
-  # Framework-Klon vorhanden?
-  if [ ! -d "$FRAMEWORK_DIR/.git" ]; then
-    # Klonen (via ssh, fallback https)
-    if ! git clone "git@github.com:$GH_ORG/$PUBLIC_REPO.git" "$FRAMEWORK_DIR" 2>/dev/null \
-      && ! git clone "https://github.com/$GH_ORG/$PUBLIC_REPO.git" "$FRAMEWORK_DIR" 2>/dev/null; then
-      log "⚠️  Framework-Klon fehlgeschlagen — Self-Update übersprungen"
-      return
-    fi
+_desired_version() {
+  local stamp="$AGENT_MESH_HOME/.desired-version"
+  local age=999999 now; now=$(date -u +%s)
+  if [ -f "$stamp" ]; then
+    local mt
+    # BSD und GNU stat sind nicht austauschbar — beide versuchen.
+    mt=$(stat -f %m "$stamp" 2>/dev/null || stat -c %Y "$stamp" 2>/dev/null || echo 0)
+    age=$((now - mt))
   fi
-  # VERSION vergleichen (lokale VERSION-Datei vs. origin/main)
-  local local_v remote_v
-  local_v=$(cat "$FRAMEWORK_DIR/VERSION" 2>/dev/null || echo "0.0.0")
-  remote_v=$(cd "$FRAMEWORK_DIR" && git fetch origin main --quiet 2>/dev/null; \
-             git show origin/main:VERSION 2>/dev/null || echo "$local_v")
-  if [ "$local_v" != "$remote_v" ]; then
-    log "⬆️  Framework-Update: v$local_v → v$remote_v — aktualisiere…"
-    # pull + install (agent-mesh update macht genau das)
-    "$BIN" update >> "$AGENT_MESH_HOME/watch.log" 2>&1 \
-      || log "⚠️  Framework-Update fehlgeschlagen (Log: $AGENT_MESH_HOME/watch.log)"
-    log "✅ Framework aktualisiert auf v$remote_v"
+  if [ "$age" -lt "$CONVERGE_VERSION_EVERY" ] && [ -s "$stamp" ]; then
+    cat "$stamp"; return 0
+  fi
+  # Ohne Klon gibt es nichts zu vergleichen — dann soll `update` klonen.
+  [ -d "$FRAMEWORK_DIR/.git" ] || { echo ""; return 0; }
+  local v
+  v=$( (cd "$FRAMEWORK_DIR" && git fetch origin main --quiet 2>/dev/null; \
+        git show origin/main:VERSION 2>/dev/null) || true )
+  v=$(printf '%s' "$v" | tr -d '[:space:]')
+  if [ -n "$v" ]; then
+    printf '%s' "$v" > "$stamp"
+    echo "$v"
+  else
+    # Netz weg: die letzte bekannte Soll-Version gilt weiter. Ein Ausfall der
+    # Verbindung darf keinen Agent zum Handeln bewegen.
+    cat "$stamp" 2>/dev/null || echo ""
   fi
 }
 
-# Zykluszähler für Self-Update
-CYCLE=0
-
-while true; do
-  CYCLE=$((CYCLE+1))
-  # 0. Self-Update: Framework prüfen (nicht bei jedem Zyklus — sparsam)
-  if [ $((CYCLE % UPDATE_EVERY)) -eq 0 ]; then
-    check_framework_update
+# Die Version, die WIRKLICH läuft. Das CLI-Modul trägt sie eingebettet; ist es
+# (noch) nicht geladen, hilft der Quellklon als Näherung weiter.
+_running_version() {
+  if [ -n "${AGENT_MESH_VERSION:-}" ]; then
+    echo "$AGENT_MESH_VERSION"
+  else
+    cat "$FRAMEWORK_DIR/VERSION" 2>/dev/null || echo "0.0.0"
   fi
-  # 1. Nur prüfen: hat sich der Remote geändert? (billig)
-  if (cd "$MEMORIES_DIR" && git fetch origin main --quiet 2>/dev/null); then
-    BEHIND=$(cd "$MEMORIES_DIR" && git rev-list --count HEAD..origin/main 2>/dev/null || echo 0)
-    if [ "${BEHIND:-0}" -gt 0 ]; then
-      log "⬆️  $BEHIND neue Commit(s) — synce…"
-      "$BIN" sync >> "$AGENT_MESH_HOME/watch.log" 2>&1 || log "⚠️  sync meldete Fehler (Log: $AGENT_MESH_HOME/watch.log)"
-      # Inbox anzeigen, falls Nachrichten da sind
-      INBOX=$("$BIN" inbox 2>/dev/null | grep -c "──" || true)
-      [ "${INBOX:-0}" -gt 0 ] && log "📬 $INBOX Nachricht(en) in der Mailbox (agent-mesh inbox)"
-      # Auto-Respond: neue Nachrichten beantworten (Swarm-Intelligenz!)
-      "$BIN" respond >> "$AGENT_MESH_HOME/watch.log" 2>&1 \
-        || log "⚠️  Auto-Respond meldete Fehler (Log: $AGENT_MESH_HOME/watch.log)"
+}
+
+# ── Ein Durchlauf ──────────────────────────────────────────────────────────
+cmd_converge() {
+  local quiet=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --quiet) quiet=1 ;;
+      --once)  ;;   # Default; nur der Deutlichkeit halber erlaubt
+      *) echo "❌ converge: unbekannte Option '$1' (agent-mesh converge --help)" >&2; return 2 ;;
+    esac
+    shift
+  done
+  _converge_env || return 1
+
+  local changed=0 failed=0
+
+  # 1. Soll-Version herstellen
+  # Nur nachziehen, wenn die laufende Version ÄLTER ist — nicht bei jeder
+  # Abweichung. Sonst versucht eine Maschine, die dem Release voraus ist (die
+  # des Maintainers, oder eine mitten in der Vorbereitung), sich im Minutentakt
+  # herunterzustufen, wird jedes Mal vom Downgrade-Schutz abgewiesen und
+  # meldet dauerhaft rot.
+  local want have newer=1
+  want=$(_desired_version); have=$(_running_version)
+  if type version_lt >/dev/null 2>&1; then
+    version_lt "$have" "$want" || newer=0
+  else
+    [ "$want" != "$have" ] || newer=0
+  fi
+  if [ -n "$want" ] && [ "$newer" = "1" ]; then
+    changed=1
+    echo "⬆️  Version v$have → v$want — aktualisiere…"
+    if "$BIN" update >> "$LOG" 2>&1; then
+      # Nicht die Handlung melden, sondern das Ergebnis: `update` kann die
+      # Signaturprüfung bestehen und trotzdem an fehlenden Schreibrechten
+      # scheitern. Was zählt, ist, was danach läuft.
+      local now_v; now_v=$("$BIN" --version 2>/dev/null | head -1 | awk '{print $2}')
+      if [ "$now_v" = "$want" ]; then
+        echo "✅ jetzt auf v$want"
+      else
+        echo "❌ Update lief, aber es läuft weiter v${now_v:-?} — Log: $LOG"
+        failed=1
+      fi
+    else
+      echo "❌ Update fehlgeschlagen — Log: $LOG"
+      failed=1
     fi
   fi
-  # Wartungssignale prüfen (Broadcast "agent-mesh maintenance")
-  "$BIN" maintenance-run >> "$AGENT_MESH_HOME/watch.log" 2>&1 || true
-  # Peer-Empfang: Relay-Queue leeren (Echtzeit-Nachrichten, die wir verpasst haben)
-  "$BIN" peer-recv >> "$AGENT_MESH_HOME/watch.log" 2>&1 || true
-  sleep "$INTERVAL"
-done
+
+  # 2. Wartungssignale (Beschleuniger; Schritt 1 wirkt auch ohne sie)
+  "$BIN" maintenance-run >> "$LOG" 2>&1 || failed=1
+
+  # 3. Repo-Änderungen übernehmen
+  if (cd "$MEMORIES_DIR" && git fetch origin main --quiet 2>/dev/null); then
+    local behind
+    behind=$(cd "$MEMORIES_DIR" && git rev-list --count HEAD..origin/main 2>/dev/null || echo 0)
+    if [ "${behind:-0}" -gt 0 ]; then
+      changed=1
+      echo "⬆️  $behind neue Commit(s) — synce…"
+      "$BIN" sync >> "$LOG" 2>&1 || { echo "⚠️  sync meldete Fehler — Log: $LOG"; failed=1; }
+      local inbox
+      inbox=$("$BIN" inbox 2>/dev/null | grep -c "──" || true)
+      [ "${inbox:-0}" -gt 0 ] && echo "📬 $inbox Nachricht(en) (agent-mesh inbox)"
+      "$BIN" respond >> "$LOG" 2>&1 || { echo "⚠️  Auto-Respond meldete Fehler — Log: $LOG"; failed=1; }
+    fi
+  fi
+
+  # 4. Relay-Warteschlange
+  "$BIN" peer-recv >> "$LOG" 2>&1 || true
+
+  # Auch OHNE Änderung muss der Bericht frisch werden: ein alter Bericht ist
+  # in der Flottenübersicht nicht von einem toten Agent zu unterscheiden, und
+  # genau diese Unterscheidung ist das, was gestern gefehlt hat.
+  local rep="$MEMORIES_DIR/agents/${AGENT_NAME}/report.json"
+  if [ "$changed" = "0" ] && [ -f "$rep" ]; then
+    local rage=0 mt now
+    now=$(date -u +%s)
+    mt=$(stat -f %m "$rep" 2>/dev/null || stat -c %Y "$rep" 2>/dev/null || echo 0)
+    rage=$((now - mt))
+    if [ "$rage" -gt 3600 ]; then
+      "$BIN" sync >> "$LOG" 2>&1 || failed=1
+    fi
+  fi
+
+  [ "$changed" = "0" ] && [ "$quiet" = "0" ] && echo "✅ Soll-Zustand — nichts zu tun (v$have)"
+  return "$failed"
+}
+
+# ── Dauerlauf ──────────────────────────────────────────────────────────────
+cmd_watch() {
+  local interval="${1:-60}"
+  case "$interval" in
+    *[!0-9]*|'') echo "❌ Intervall muss eine Zahl sein (Sekunden)" >&2; exit 1 ;;
+  esac
+  _converge_env || exit 1
+
+  log() { echo "[$(date -u +%H:%M:%S)] $*"; }
+  log "🔄 agent-mesh watch gestartet (Agent: $AGENT_NAME, Intervall: ${interval}s)"
+  log "   Versionsprüfung höchstens alle ${CONVERGE_VERSION_EVERY}s — und sofort beim Start."
+
+  while true; do
+    # Jede Runde ist ein vollständiger, in sich abgeschlossener Abgleich.
+    # Fällt eine aus, ist die nächste dadurch nicht weniger vollständig.
+    # Das `|| true` ist nicht kosmetisch: unter `set -e` würde ein converge,
+    # das eine 1 zurückgibt, die Schleife beenden — also genau das
+    # stille Absterben des Daemons, dessentwegen dieser Umbau stattfindet.
+    { cmd_converge --quiet 2>&1 || true; } | while IFS= read -r line; do log "$line"; done
+    sleep "$interval"
+  done
 }

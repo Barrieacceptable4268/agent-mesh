@@ -50,6 +50,24 @@ PRIVATE_REPO="${AGENT_MESH_PRIVATE_REPO:-agent-mesh-memories}"
 MEMORIES_DIR="$AGENT_MESH_HOME/memories"          # Klon des privaten Repos
 FRAMEWORK_DIR="$AGENT_MESH_HOME/framework"        # Klon des public Repos
 
+# CLI-Gerüst (Registry, Hilfe, Version) — muss ZUERST kommen: es ist das
+# Einzige, was auch ohne Konfiguration funktionieren muss.
+CLI_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-cli.sh"
+[ -f "$CLI_MODULE" ] && source "$CLI_MODULE"
+# Kommt das Modul einmal nicht mit — ein Update, das nur die Hälfte
+# installiert, ist in diesem Projekt keine Theorie —, dann darf NICHT die
+# ganze Kommandozeile ausfallen. Der Dispatcher ruft cli_is_command bei jedem
+# Aufruf; eine fehlende Funktion würde unter `set -e` jedes einzelne Kommando
+# beenden, statt nur die Hilfe zu kosten.
+if ! type cli_is_command >/dev/null 2>&1; then
+  AGENT_MESH_VERSION="unbekannt"
+  cli_is_command() { return 1; }
+  cli_overview() { echo "⚠️  agent-mesh-cli.sh fehlt neben $0 — keine Hilfe verfügbar." >&2
+                   echo "   Installation reparieren: agent-mesh update --force" >&2; }
+  cli_cmd_help() { cli_overview; }
+  cli_version()  { echo "agent-mesh (Version unbekannt — agent-mesh-cli.sh fehlt)"; }
+  cli_unknown()  { echo "❌ Unbekanntes Kommando: '${1:-}'" >&2; }
+fi
 # A2A-Modul (Agent-to-Agent, Rollen, Hub-Routing) einbinden
 A2A_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-a2a.sh"
 [ -f "$A2A_MODULE" ] && source "$A2A_MODULE"
@@ -288,11 +306,22 @@ PYEOF
   # geschriebener oder mit Fremdausgabe verunreinigter Bericht ist schlimmer
   # als gar keiner: er sieht in der Flotten-Übersicht wie ein defekter Agent
   # aus, obwohl nur das Schreiben schiefging.
+  #
+  # Und er wird nur übernommen, wenn er etwas NEUES sagt. Bis v1.27.0 änderte
+  # sich bei jedem sync mindestens der Zeitstempel — also gab es immer einen
+  # Commit, also sahen alle anderen Agents "Repo geändert", also synchten sie,
+  # also committeten sie ihrerseits. Sechs Agents im Minutentakt haben sich so
+  # gegenseitig dauerhaft in Bewegung gehalten, ohne dass je etwas passiert
+  # wäre. Ein Herzschlag darf nicht der Grund für den nächsten sein.
   local _rep; _rep=$(mktemp)
   if cmd_report --json > "$_rep" 2>/dev/null \
      && [ -s "$_rep" ] \
      && "$PYTHON_BIN" -c "import json,sys; json.load(open(sys.argv[1]))" "$_rep" 2>/dev/null; then
-    mv -f "$_rep" "$agent_dir/report.json"
+    if report_is_news "$_rep" "$agent_dir/report.json"; then
+      mv -f "$_rep" "$agent_dir/report.json"
+    else
+      rm -f "$_rep"
+    fi
   else
     warn "Zustandsbericht ungültig — nicht veröffentlicht (sync läuft weiter)"
     warn "  Selbst ansehen: agent-mesh report --json | head -5"
@@ -311,6 +340,43 @@ PYEOF
 
   info "✅ Sync abgeschlossen."
   cmd_status
+}
+
+# Sagt der neue Bericht etwas, das der alte nicht schon sagt? Der Zeitstempel
+# zählt dabei NICHT als Aussage — sonst wäre jeder Bericht eine Neuigkeit und
+# die Flotte hielte sich selbst in Bewegung (siehe oben).
+#
+# Ausnahme: nach AGENT_MESH_HEARTBEAT Sekunden (Default 1h) wird auch ein
+# unveränderter Bericht erneuert. Ohne dieses Lebenszeichen wäre "seit Stunden
+# still" nicht mehr von "läuft nicht mehr" zu unterscheiden — und genau diese
+# Unterscheidung ist es, die den Rollout vom 2026-08-22 gekostet hat.
+report_is_news() {
+  local new="$1" old="$2"
+  [ -f "$old" ] || return 0
+  local hb="${AGENT_MESH_HEARTBEAT:-3600}"
+  "$PYTHON_BIN" - "$new" "$old" "$hb" << 'PYNEWS'
+import calendar, json, sys, time
+
+new_p, old_p, hb = sys.argv[1], sys.argv[2], int(sys.argv[3])
+try:
+    new = json.load(open(new_p, encoding="utf-8"))
+    old = json.load(open(old_p, encoding="utf-8"))
+except Exception:
+    sys.exit(0)          # alter Bericht unlesbar → der neue ist auf jeden Fall besser
+
+def without_ts(d):
+    return {k: v for k, v in d.items() if k != "ts"}
+
+if without_ts(new) != without_ts(old):
+    sys.exit(0)          # inhaltliche Änderung → veröffentlichen
+
+try:
+    t = calendar.timegm(time.strptime(old.get("ts", ""), "%Y-%m-%dT%H:%M:%SZ"))
+except Exception:
+    sys.exit(0)          # ohne lesbaren Zeitstempel lieber erneuern
+
+sys.exit(0 if time.time() - t > hb else 1)
+PYNEWS
 }
 
 # ─────────────────────────── vault (sops + age) ───────────────────────────
@@ -747,6 +813,27 @@ cmd_status() {
 
 # ─────────────────────────── main ───────────────────────────
 main() {
+# ── Selbstauskunft, bevor irgendetwas Konfiguration braucht ──
+# Hilfe und Version müssen auf einer frisch aufgesetzten Maschine funktionieren
+# — dort, wo noch keine agent-mesh.conf existiert und man am ehesten nachsieht,
+# wie das Werkzeug heisst.
+case "${1:-}" in
+  -h|--help|help)
+    if [ -n "${2:-}" ]; then cli_cmd_help "$2"; exit $?; fi
+    cli_overview; exit 0 ;;
+  -V|--version|version)
+    cli_version; exit 0 ;;
+esac
+
+# `agent-mesh <kommando> --help` — aber nur, wenn --help direkt hinter dem
+# Kommando steht. Sonst würde "send ax41 'wie geht --help'" die Nachricht
+# verschlucken, statt sie zu senden.
+if [ -n "${1:-}" ] && cli_is_command "$1"; then
+  case "${2:-}" in
+    -h|--help) cli_cmd_help "$1"; exit 0 ;;
+  esac
+fi
+
 case "${1:-}" in
   init)    shift; cmd_init "$@" ;;
   sync)    shift; cmd_sync ;;
@@ -786,7 +873,18 @@ case "${1:-}" in
   update)  shift; cmd_update "$@" ;;
   trust)   shift; cmd_trust "$@" ;;
   status)  shift; cmd_status ;;
-  *) echo "Usage: agent-mesh {init|sync|send|reply|inbox|route|role|agents|vault|insight|watch|connect|update|trust|doctor|report|fleet|maintenance|status}" >&2; exit 1 ;;
+  converge) shift; cmd_converge "$@" ;;
+  # Ohne Argument: die Übersicht, nicht eine Zeile Usage. Der Exit-Code bleibt
+  # 1 — ein Aufruf ohne Kommando hat nichts getan, und Skripte, die das bisher
+  # geprüft haben, sollen weiter funktionieren.
+  "") cli_overview >&2; exit 1 ;;
+  *) cli_unknown "$1"; exit 2 ;;
 esac
 }
-main "$@"
+# Nur ausführen, wenn dieses Skript AUFGERUFEN wurde — nicht, wenn es gesourct
+# wird. Erst dadurch kann eine Testsuite einzelne Funktionen prüfen, ohne dass
+# der Dispatcher losläuft. (Die Module tun das seit jeher; das Hauptskript war
+# die letzte Datei, die man nur als Ganzes starten konnte.)
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+  main "$@"
+fi

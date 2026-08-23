@@ -24,6 +24,11 @@ jobs:
       - name: Syntax and audit patterns
         run: .github/scripts/check.sh
 
+      - name: Testsuite
+        # Seit v1.28.0. Vorher pruefte dieses Gate Syntax und Muster — ob ein
+        # Kommando tut, was es sagt, sah nichts nach.
+        run: tests/run.sh
+
       - name: Release tag is signed by a trusted key
         # Only meaningful once a tag for this version exists. Pull requests and
         # ordinary pushes skip it; a release that fails it would freeze the

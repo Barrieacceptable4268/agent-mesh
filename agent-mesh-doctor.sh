@@ -224,6 +224,21 @@ security_checks() {
   esac
 
   echo ""
+  echo "── Lebenszeichen ──"
+  # Bis v1.27.0 wurde nur ERHOBEN, ob ein watch-Prozess läuft; ein Befund war
+  # es nie. Am 2026-08-22 haben genau deshalb zwei Agents ein Release über
+  # Nacht verpasst: kein Watcher, kein Update, keine Nachricht — und nichts,
+  # das gesagt hätte, dass dort niemand mehr zuhört.
+  if pgrep -f "[a]gent-mesh watch" >/dev/null 2>&1; then
+    pass "watch läuft — dieser Agent bekommt Updates und Nachrichten mit"
+  else
+    bad "Kein watch-Prozess — dieser Agent hört nicht zu"
+    note "Ein stiller Agent verpasst Updates, Nachrichten und Wartungssignale."
+    note "Einrichten (startet nach Absturz und Neustart von selbst):"
+    note "  agent-mesh service install && agent-mesh service status"
+  fi
+
+  echo ""
   if [ "$fail" -eq 0 ]; then
     echo "✅ $ok Prüfungen bestanden — keine offenen Sicherheitsbefunde."
   else
@@ -429,9 +444,16 @@ def fmt_age(h):
 if not newest:
     newest = max([r.get("version", "") for r in rows if not r.get("broken")] or [""])
 
-print(f"{'AGENT':<24} {'VERSION':<9} {'BERICHT':<8} {'TRUST':<6} {'KEYS':<6} {'RELEASE':<10} {'SEC':<7} PROBLEME")
+# Ab wann ist Schweigen ein Befund? Jeder Agent erneuert sein Lebenszeichen
+# stuendlich (AGENT_MESH_HEARTBEAT). Wer zwei Stunden nichts gesagt hat, hat
+# nicht "einen alten Bericht" — bei dem laeuft der watch-Dienst nicht mehr,
+# und er bekommt weder Update noch Nachricht noch Wartungssignal mit.
+STALE_H = 2
+
+print(f"{'AGENT':<24} {'VERSION':<9} {'LETZTES LZ':<11} {'TRUST':<6} {'KEYS':<6} {'RELEASE':<10} {'SEC':<7} PROBLEME")
 print("─" * 108)
 stale, behind, unhealthy = 0, 0, 0
+dead = []
 for r in rows:
     if r.get("broken"):
         print(f"{r['agent']:<24} {'?':<9} {'defekt':<8} — {r.get('why', 'nicht lesbar')}")
@@ -440,8 +462,10 @@ for r in rows:
     a = (r.get("agent") or "?")[:23]
     v = r.get("version") or "?"
     h = age(r.get("ts", ""))
-    old = h is not None and h > 24
-    if old: stale += 1
+    old = h is not None and h > STALE_H
+    if old:
+        stale += 1
+        dead.append(a)
     vmark = "" if v == newest else "!"
     if vmark: behind += 1
     trust = "ja" if r.get("trust") else "NEIN"
@@ -451,14 +475,19 @@ for r in rows:
     sec = "ok" if bad == 0 else f"{bad} offen"
     if bad or trust == "NEIN" or keys == "FEHLT" or vmark: unhealthy += 1
     first = (r.get("issues") or [""])[0][:34]
-    print(f"{a:<24} {v+vmark:<9} {fmt_age(h)+('!' if old else ''):<8} "
+    print(f"{a:<24} {v+vmark:<9} {fmt_age(h)+(' STILL' if old else ''):<11} "
           f"{trust:<6} {keys:<6} {rel:<10} {sec:<7} {first}")
 
 print("─" * 108)
-print(f"{len(rows)} Agent(en) · {behind} nicht auf v{newest} · {stale} Bericht(e) älter als 24h "
+print(f"{len(rows)} Agent(en) · {behind} nicht auf v{newest} · {stale} ohne Lebenszeichen "
       f"· {unhealthy} mit offenen Punkten")
-if stale:
-    print("Hinweis: ein alter Bericht beschreibt einen alten Zustand — dort zuerst 'agent-mesh sync'.")
+if dead:
+    print("")
+    print(f"❌ Kein Lebenszeichen seit ueber {STALE_H}h: {', '.join(dead)}")
+    print("   Dort laeuft der watch-Dienst nicht. Ein stiller Agent bekommt weder")
+    print("   Update noch Nachricht noch Wartungssignal mit — er faellt lautlos aus")
+    print("   dem Verbund, und die Flotte sieht trotzdem gruen aus.")
+    print("   Auf der Maschine:  agent-mesh service status && agent-mesh service install")
 PYFLEET
 }
 
