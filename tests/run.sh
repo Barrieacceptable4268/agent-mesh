@@ -127,7 +127,7 @@ dispatched() {
 if t "registry: jedes registrierte Kommando wird auch dispatcht"; then
   d=$(dispatched); missing=""
   for c in $(registry_names); do
-    printf '%s\n' "$d" | grep -qx "$c" || missing="$missing $c"
+    printf '%s\n' "$d" | grep -x "$c" >/dev/null || missing="$missing $c"
   done
   [ -z "$missing" ] && ok || no "in der Hilfe, aber nicht aufrufbar:$missing"
 fi
@@ -136,7 +136,7 @@ if t "registry: jedes dispatchte Kommando ist auch dokumentiert"; then
   known=$(registry_names)
   undocumented=""
   for c in $(dispatched); do
-    printf '%s\n' "$known" | grep -qx "$c" || undocumented="$undocumented $c"
+    printf '%s\n' "$known" | grep -x "$c" >/dev/null || undocumented="$undocumented $c"
   done
   [ -z "$undocumented" ] && ok || no "aufrufbar, aber nirgends erklärt:$undocumented"
 fi

@@ -6,6 +6,11 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.28.1
+
+Nothing to do. Umlauts restored in the `fleet` and `doctor` output that
+v1.28.0 printed as `laeuft` / `gruen`.
+
 ## v1.28.0
 
 **Nothing to do by hand.** Every change below takes effect on its own after

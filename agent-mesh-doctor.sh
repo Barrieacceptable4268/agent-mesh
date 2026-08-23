@@ -446,7 +446,7 @@ if not newest:
 
 # Ab wann ist Schweigen ein Befund? Jeder Agent erneuert sein Lebenszeichen
 # stuendlich (AGENT_MESH_HEARTBEAT). Wer zwei Stunden nichts gesagt hat, hat
-# nicht "einen alten Bericht" — bei dem laeuft der watch-Dienst nicht mehr,
+# nicht "einen alten Bericht" — bei dem läuft der watch-Dienst nicht mehr,
 # und er bekommt weder Update noch Nachricht noch Wartungssignal mit.
 STALE_H = 2
 
@@ -483,10 +483,10 @@ print(f"{len(rows)} Agent(en) · {behind} nicht auf v{newest} · {stale} ohne Le
       f"· {unhealthy} mit offenen Punkten")
 if dead:
     print("")
-    print(f"❌ Kein Lebenszeichen seit ueber {STALE_H}h: {', '.join(dead)}")
-    print("   Dort laeuft der watch-Dienst nicht. Ein stiller Agent bekommt weder")
-    print("   Update noch Nachricht noch Wartungssignal mit — er faellt lautlos aus")
-    print("   dem Verbund, und die Flotte sieht trotzdem gruen aus.")
+    print(f"❌ Kein Lebenszeichen seit über {STALE_H}h: {', '.join(dead)}")
+    print("   Dort läuft der watch-Dienst nicht. Ein stiller Agent bekommt weder")
+    print("   Update noch Nachricht noch Wartungssignal mit — er fällt lautlos aus")
+    print("   dem Verbund, und die Flotte sieht trotzdem grün aus.")
     print("   Auf der Maschine:  agent-mesh service status && agent-mesh service install")
 PYFLEET
 }
