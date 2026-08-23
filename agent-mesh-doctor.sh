@@ -271,7 +271,7 @@ report_facts() {
   R_OS=$(uname -sr 2>/dev/null || echo "?")
   R_AGENT=""; R_VERSION=""; R_COMMIT=""; R_REMOTE=""; R_INSTALLS=""
   R_ONPATH=""; R_TRUST=""; R_RELEASE=""; R_KEYS=""; R_TOKEN="nein"
-  R_WATCHER="nein"; R_OK=0; R_BAD=0; R_ISSUES=""
+  R_WATCHER="nein"; R_OK=0; R_BAD=0; R_ISSUES=""; R_COMPONENTS=""
 
   [ -f "$conf" ] && R_AGENT=$(grep "^AGENT_NAME=" "$conf" 2>/dev/null | cut -d= -f2- | head -1)
 
@@ -326,6 +326,7 @@ report_facts() {
   # Zuhören heisst nicht mehr "ein Prozess läuft", sondern "es wurde vor
   # Kurzem konvergiert" — der Dienst ist seit v1.31.0 ein Intervall.
   R_WATCHER=$(converge_liveness "$home")
+  R_COMPONENTS=$(running_components)
 
   if [ -f "$conf" ]; then
     local out
@@ -334,6 +335,43 @@ report_facts() {
     R_BAD=$(printf '%s\n' "$out" | grep -c "❌" || true)
     R_ISSUES=$(printf '%s\n' "$out" | grep "❌" | sed 's/^ *//' | head -8 || true)
   fi
+}
+
+# Welche agent-mesh-Komponenten laufen auf DIESER Maschine?
+#
+# Entstanden aus einer Frage, die sich von aussen nicht beantworten liess:
+# `agent-mesh-relay.py`, `-webhook.py` und `-dashboard.js` werden auf jede
+# Maschine installiert, aber von der CLI nie aufgerufen — sie sind eigene
+# Dienste. Ob sie irgendwo laufen, wusste niemand, und "wahrscheinlich nicht"
+# ist keine Grundlage, um 800 Zeilen zu löschen.
+#
+# Ein Verbund, der nicht sagen kann, was in ihm läuft, kann nicht aufgeräumt
+# werden. Also sagt er es jetzt.
+running_components() {
+  local found=""
+  _rc_seen() { case " $found " in *" $1 "*) return 0;; *) return 1;; esac; }
+  _rc_add()  { _rc_seen "$1" || found="$found $1"; }
+
+  # Prozesse — funktioniert überall, auch ohne systemd.
+  pgrep -f "[a]gent-mesh-relay.py"     >/dev/null 2>&1 && _rc_add relay
+  pgrep -f "[a]gent-mesh-webhook.py"   >/dev/null 2>&1 && _rc_add webhook
+  pgrep -f "[a]gent-mesh-dashboard.js" >/dev/null 2>&1 && _rc_add dashboard
+  pgrep -f "[a]gent-mesh watch"        >/dev/null 2>&1 && _rc_add watch-alt
+
+  # Dienste, die eingerichtet sind — auch wenn gerade kein Prozess läuft.
+  if command -v systemctl >/dev/null 2>&1; then
+    local u
+    for u in agent-mesh-relay agent-mesh-webhook agent-mesh-dashboard; do
+      systemctl is-enabled "$u" >/dev/null 2>&1 && _rc_add "${u#agent-mesh-}"
+    done
+    systemctl is-enabled agent-mesh-converge.timer >/dev/null 2>&1 && _rc_add converge-timer
+    systemctl is-enabled agent-mesh-watch >/dev/null 2>&1 && _rc_add watch-alt
+  fi
+  if command -v launchctl >/dev/null 2>&1; then
+    launchctl list 2>/dev/null | grep "dev.moinsen.agentmesh.watch" >/dev/null && _rc_add converge-timer
+  fi
+
+  printf '%s' "${found# }"
 }
 
 # Wann hat dieser Agent zuletzt konvergiert? "ja" / "nein".
@@ -502,6 +540,40 @@ for r in rows:
 print("─" * 108)
 print(f"{len(rows)} Agent(en) · {behind} nicht auf v{newest} · {stale} ohne Lebenszeichen "
       f"· {unhealthy} mit offenen Punkten")
+# Welche Komponenten laufen im Verbund wirklich — und welche nirgends?
+# Ohne diese Zeile ist jede Aufräum-Entscheidung geraten: relay, webhook und
+# dashboard werden auf jede Maschine installiert, von der CLI aber nie
+# aufgerufen. Was nirgends läuft, kann weg; was irgendwo läuft, nicht.
+KNOWN = ["relay", "webhook", "dashboard", "converge-timer", "watch-alt"]
+where = {c: [] for c in KNOWN}
+unknown = {}
+for r in rows:
+    if r.get("broken"):
+        continue
+    for c in (r.get("components") or []):
+        (where[c] if c in where else unknown.setdefault(c, [])).append(r.get("agent", "?"))
+live = [r for r in rows if not r.get("broken")]
+reporting = [r for r in live if r.get("components") is not None]
+if reporting:
+    print("")
+    # "nirgends" darf NICHT heissen "in keinem Bericht, der es sagen kann".
+    # Ein Agent auf einer alten Fassung kennt das Feld nicht — seine Dienste
+    # wären unsichtbar, und eine Aufräum-Entscheidung auf dieser Grundlage
+    # würde löschen, was anderswo läuft.
+    complete = len(reporting) == len(live)
+    scope = "alle" if complete else f"{len(reporting)} von {len(live)}"
+    print(f"Laufende Komponenten ({scope} Agent(en) berichten das):")
+    for c in KNOWN + sorted(unknown):
+        hosts = where.get(c, unknown.get(c, []))
+        print(f"  {c:<16} {', '.join(hosts) if hosts else '—'}")
+    silent = [c for c in KNOWN if not where[c]]
+    if silent and complete:
+        print(f"  → läuft nirgends im Verbund: {', '.join(silent)}")
+    elif silent:
+        missing = [r.get("agent", "?") for r in live if r.get("components") is None]
+        print(f"  → ohne Angabe: {', '.join(missing)} — solange die schweigen, heisst")
+        print("    ein leerer Eintrag NICHT, dass die Komponente nirgends läuft.")
+
 if dead:
     print("")
     print(f"❌ Kein Lebenszeichen seit über {STALE_H}h: {', '.join(dead)}")
@@ -522,15 +594,16 @@ cmd_report() {
   if [ "${1:-}" = "--json" ]; then
     "$PYTHON_BIN" - "$R_TS" "$R_HOST" "$R_OS" "$R_AGENT" "$R_VERSION" "$R_COMMIT" \
       "$R_REMOTE" "$R_INSTALLS" "$R_ONPATH" "$R_TRUST" "$R_RELEASE" "$R_KEYS" \
-      "$R_TOKEN" "$R_WATCHER" "$R_OK" "$R_BAD" "$R_ISSUES" << 'PYJSON'
+      "$R_TOKEN" "$R_WATCHER" "$R_OK" "$R_BAD" "$R_ISSUES" "$R_COMPONENTS" << 'PYJSON'
 import json, sys
 k = ["ts","host","os","agent","version","commit","remote","installs","onpath",
-     "trust","release","keys","relay_token","watcher","ok","bad","issues"]
-v = sys.argv[1:18]
+     "trust","release","keys","relay_token","watcher","ok","bad","issues","components"]
+v = sys.argv[1:19]
 d = dict(zip(k, v))
 d["ok"] = int(d["ok"] or 0); d["bad"] = int(d["bad"] or 0)
 d["installs"] = [x for x in d["installs"].split() if x]
 d["issues"] = [x for x in d["issues"].split("\n") if x.strip()]
+d["components"] = [x for x in d.get("components", "").split() if x]
 print(json.dumps(d, ensure_ascii=False, indent=2, sort_keys=True))
 PYJSON
     return 0
@@ -558,6 +631,7 @@ PYJSON
   printf '%-14s %s\n' "auf PATH" "${R_ONPATH:-NICHT GEFUNDEN}"
   printf '%-14s %s\n' "trust" "${R_TRUST:-FEHLT — agent-mesh trust}"
   printf '%-14s %s\n' "release" "$R_RELEASE"
+  printf '%-14s %s\n' "läuft hier" "${R_COMPONENTS:-nur die Konvergenz}"
   [ -n "$R_KEYS" ] && printf '%-14s %s\n' "keys" "$R_KEYS"
   [ "$R_TOKEN" = "ja" ] && printf '%-14s %s\n' "relay-token" "NOCH IN DER CONF  ⚠️"
   printf '%-14s %s\n' "watcher" "$R_WATCHER"

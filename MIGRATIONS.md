@@ -6,6 +6,34 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.33.0
+
+**Before deleting anything, the mesh has to be able to say what runs in it.**
+
+`agent-mesh-relay.py`, `-webhook.py` and `-dashboard.js` are installed on every
+machine and never invoked by the CLI — they are separate services with their
+own units. Whether any of them runs anywhere was not knowable from the outside,
+and "probably not" is no basis for deleting 800 lines.
+
+`report` now lists the components actually running or enabled on a machine, and
+`fleet` summarises them across the mesh. Which makes a clean-up an
+evidence-based decision instead of a guess.
+
+The summary is careful about one thing in particular: an agent on an older
+version does not report the field at all, so an empty entry must not read as
+"runs nowhere". `fleet` says how many agents could answer, names those that
+could not, and only states "runs nowhere in the mesh" when every one of them
+has reported.
+
+**And a Windows gap that v1.31.0 left open.** Replacing `/SC ONLOGON` with
+`/SC MINUTE` fixed the repetition but not the session: without `/RU`, a
+scheduled task belongs to the logged-on user and rests when nobody is logged
+on. Half the failure, repaired — and the more dangerous half, because it now
+*looks* fixed. Tasks are created as SYSTEM; if that needs rights the console
+does not have, the fallback to the user context is stated out loud rather than
+passed off as success, and `service status` names a task that runs as anything
+other than SYSTEM.
+
 ## v1.32.1
 
 **A regression v1.31.0 caused, found by the fleet view within minutes.**

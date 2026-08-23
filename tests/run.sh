@@ -323,6 +323,30 @@ if t "install: jedes Framework-Modul steht in install.sh"; then
   [ -z "$missing" ] && ok || no "würde neu installierten Agents fehlen:$missing"
 fi
 
+# ════════════════ Was wo läuft ════════════════
+# Vor dem Aufräumen muss der Verbund sagen können, was in ihm läuft. relay,
+# webhook und dashboard werden auf jede Maschine installiert und von der CLI
+# nie aufgerufen — ob sie irgendwo laufen, wusste bis v1.33.0 niemand, und
+# "wahrscheinlich nicht" ist keine Grundlage, um 800 Zeilen zu löschen.
+echo ""
+echo "Was wo läuft"
+
+if t "komponenten: der Bericht nennt, was hier laeuft"; then
+  out=$("$BIN" report --json 2>/dev/null)
+  printf '%s' "$out" | "$PYTHON_BIN_T" -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if isinstance(d.get('components'), list) else 1)" 2>/dev/null \
+    && ok || no "report --json fuehrt kein components-Feld"
+fi
+
+if t "komponenten: fleet haelt Schweigen und Abwesenheit auseinander"; then
+  # "nirgends" darf nicht heissen "in keinem Bericht, der es sagen kann".
+  # Ein Agent auf einer alten Fassung kennt das Feld nicht — seine Dienste
+  # waeren unsichtbar, und ein Loeschen auf dieser Grundlage waere blind.
+  block=$(sed -n '/Laufende Komponenten/,/^PYFLEET$/p' "$ROOT/agent-mesh-doctor.sh")
+  if printf '%s\n' "$block" | grep 'ohne Angabe' >/dev/null \
+     && printf '%s\n' "$block" | grep 'complete' >/dev/null; then ok
+  else no "fleet behauptet 'nirgends', ohne zu pruefen, ob alle geantwortet haben"; fi
+fi
+
 # ════════════════ Gemeinsames Gedächtnis ════════════════
 # Die eine Zusicherung, die hier zählt: es wird NICHTS eingetragen, solange der
 # Server sich nicht als brauchbar erwiesen hat. Ein Gedächtnis, das nicht
@@ -434,6 +458,22 @@ if t "dienst: Windows wiederholt sich, statt nur bei der Anmeldung zu starten"; 
   # /SC ONLOGON hiess auf einem Server, an dem sich nie jemand anmeldet: nie.
   if grep -q '//SC MINUTE' "$SVC" && ! grep -q '//Create .*//SC ONLOGON' "$SVC"; then ok
   else no "Task wieder an die Anmeldung gebunden"; fi
+fi
+
+if t "dienst: die Windows-Aufgabe laeuft als SYSTEM, nicht im Nutzerkontext"; then
+  # /SC MINUTE allein reicht nicht: ohne /RU gehoert die Aufgabe dem
+  # angemeldeten Nutzer und ruht, sobald sich niemand anmeldet. Genau diese
+  # Haelfte blieb in v1.31.0 stehen.
+  if grep -q '//RU SYSTEM' "$SVC"; then ok
+  else no "ohne /RU SYSTEM bleibt die Anmeldungs-Abhaengigkeit bestehen"; fi
+fi
+
+if t "dienst: schlaegt SYSTEM fehl, wird der Rueckfall laut gemeldet"; then
+  # Ein stiller Rueckfall auf den Nutzerkontext waere die schlimmste Variante:
+  # eingerichtet, gemeldet, und trotzdem nur bei Anmeldung.
+  body=$(sed -n '/^svc_install() {/,/^}/p' "$SVC")
+  printf '%s\n' "$body" | grep 'Administratorrechte' >/dev/null && ok \
+    || no "der Rueckfall auf den Nutzerkontext bleibt unbenannt"
 fi
 
 if t "dienst: der systemd-Timer holt verpasste Läufe nach"; then

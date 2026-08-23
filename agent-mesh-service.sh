@@ -176,8 +176,25 @@ PLIST
       # /SC MINUTE statt /SC ONLOGON: die Aufgabe wiederholt sich von selbst.
       # Mit ONLOGON lief sie auf einem Server, an dem sich nie jemand anmeldet,
       # genau nie wieder.
-      schtasks //Create //TN "$WIN_TASK" //TR "$cmd" //SC MINUTE //MO "$mins" //RL LIMITED //F >/dev/null 2>&1 \
-        || { echo "❌ Task-Scheduler-Anlage fehlgeschlagen"; return 1; }
+      #
+      # Und /RU SYSTEM, weil das ALLEIN noch nicht reicht: ohne /RU gehört die
+      # Aufgabe dem angemeldeten Nutzer und läuft nur in dessen Sitzung. Die
+      # Wiederholung wäre dann repariert und die Anmeldungs-Abhängigkeit
+      # geblieben — derselbe Ausfall, nur später bemerkt. Das war ein Fehler
+      # in v1.31.0, gefunden beim Nachrechnen, nicht im Betrieb.
+      #
+      # SYSTEM braucht erhöhte Rechte. Klappt es nicht, fällt die Anlage auf
+      # den Nutzerkontext zurück — aber laut, damit niemand glaubt, die
+      # Maschine sei versorgt.
+      if ! schtasks //Create //TN "$WIN_TASK" //TR "$cmd" //SC MINUTE //MO "$mins" \
+             //RU SYSTEM //RL HIGHEST //F >/dev/null 2>&1; then
+        echo "⚠️  Als SYSTEM nicht möglich (Administratorrechte nötig)."
+        echo "   Weiche auf den Nutzerkontext aus — die Aufgabe läuft dann NUR,"
+        echo "   solange dieser Nutzer angemeldet ist. Für einen Server bitte"
+        echo "   einmal in einer Administrator-Konsole wiederholen."
+        schtasks //Create //TN "$WIN_TASK" //TR "$cmd" //SC MINUTE //MO "$mins" //RL LIMITED //F >/dev/null 2>&1 \
+          || { echo "❌ Task-Scheduler-Anlage fehlgeschlagen"; return 1; }
+      fi
       schtasks //Run //TN "$WIN_TASK" >/dev/null 2>&1 || true
       ;;
   esac
@@ -231,6 +248,16 @@ svc_status() {
           *logon*|*anmeld*)
             echo "⚠️  Läuft nur bei der Anmeldung — stirbt der Lauf, kommt bis zur nächsten"
             echo "   Anmeldung nichts mehr. Ablösen: agent-mesh service install" ;;
+        esac
+        # Der Zeitplan allein sagt nichts: eine minütliche Aufgabe im
+        # Nutzerkontext ruht trotzdem, sobald sich niemand anmeldet.
+        local runas
+        runas=$(printf '%s\n' "$out" | grep -iE "^Run As User|^Als Benutzer" | head -1 | cut -d: -f2- | xargs || true)
+        case "$(printf '%s' "$runas" | tr '[:upper:]' '[:lower:]')" in
+          *system*) ;;
+          "") ;;
+          *) echo "⚠️  Läuft als '$runas' — also nur bei angemeldetem Nutzer."
+             echo "   In einer Administrator-Konsole: agent-mesh service install" ;;
         esac
       else
         echo "❌ '$WIN_TASK': nicht eingerichtet — 'agent-mesh service install' ausführen"
