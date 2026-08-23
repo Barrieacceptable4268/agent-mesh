@@ -33,10 +33,16 @@ New versions are `hermes profile update agent-mesh`. Your memories, sessions
 and credentials are never touched — the distribution owns only `SOUL.md`,
 `skills/`, `cron/` and `scripts/`, and nothing else is copied.
 
-Pin a release the way you pin anything else in git:
+The install tracks the repository's default branch, which is where signed
+releases land. Hermes documents a `#<ref>` suffix for pinning a tag — as of
+Hermes 0.x that suffix is not implemented and lands inside the clone URL, so
+it fails; verified against the published repo before writing this. Until it
+works, pin by installing from a local checkout of the tag you want:
 
 ```bash
-hermes profile install github.com/moinsen-dev/agent-mesh#v1.30.0
+git clone https://github.com/moinsen-dev/agent-mesh && cd agent-mesh
+git checkout v1.30.0
+hermes profile install . --name agent-mesh
 ```
 
 ### Without Hermes, or for the CLI itself

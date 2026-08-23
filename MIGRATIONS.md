@@ -6,6 +6,14 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.30.1
+
+Nothing to do. The install instructions advertised pinning a release with
+`hermes profile install ...#v1.30.0`. Hermes documents that suffix, but it is
+not implemented in the current version — the `#ref` lands inside the clone URL
+and git fails. Tested against the published repository, and the instructions
+now say how to pin via a local checkout instead.
+
 ## v1.30.0
 
 **Nothing to do — this release is about how the *next* machine joins.**
