@@ -6,6 +6,49 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.30.0
+
+**Nothing to do — this release is about how the *next* machine joins.**
+
+Setting up a mesh agent meant running an installer, then a service command
+written three times over for systemd, launchd and the Windows scheduler, then
+hoping the operator did the rest. Hermes already ships all of that, and we were
+rebuilding it.
+
+This repository is now also a **Hermes profile distribution**. One command
+installs a complete, configured agent:
+
+    hermes profile install github.com/moinsen-dev/agent-mesh --alias
+
+It carries `SOUL.md` (who this agent is in the mesh, and the rule that it says
+nothing it cannot back up), `skills/agent-mesh/` (how to operate the mesh),
+`cron/jobs.json` (the convergence job, every ten minutes) and
+`scripts/mesh-converge.sh`. New versions are `hermes profile update
+agent-mesh`; a release is pinned with `#v1.30.0`, and memories, sessions and
+credentials are never touched.
+
+Nothing else from this repo lands in the profile. The manifest declares an
+explicit `distribution_owned` allowlist, so the shell scripts, CI and docs stay
+out — which is what lets the framework repository be the distribution.
+
+For an agent that should keep the memory it already has, the additive path is
+better than a fresh profile:
+
+    hermes skills install https://raw.githubusercontent.com/moinsen-dev/agent-mesh/main/skills/agent-mesh/SKILL.md
+
+**And the daemon question.** `hermes gateway install` sets up a background
+service on macOS, Linux and Windows and restarts it after a crash or reboot;
+`hermes cron` schedules against it with a durable execution history. Prefer
+that over `agent-mesh service install` from now on — a second, self-built
+service per operating system was exactly the duplication that let two agents
+sit out a release overnight. The tool's own service stays for machines without
+a Hermes gateway.
+
+`AGENTS.md` is new too: Hermes injects it automatically for any agent working
+inside a clone of this repo, so a contributing agent starts out knowing that
+tests exist, that a new command needs both a registry entry and a dispatcher
+line, and that a version bump touches three files.
+
 ## v1.29.0
 
 **The mesh stops speaking for its agents and starts asking them.**

@@ -1,0 +1,20 @@
+{
+  "jobs": [
+    {
+      "id": "meshconverge01",
+      "name": "mesh-converge",
+      "prompt": "",
+      "skills": [],
+      "script": "mesh-converge.sh",
+      "no_agent": true,
+      "schedule": {
+        "kind": "interval",
+        "minutes": 10,
+        "display": "every 10m"
+      },
+      "schedule_display": "every 10m",
+      "enabled": true,
+      "state": "scheduled"
+    }
+  ]
+}

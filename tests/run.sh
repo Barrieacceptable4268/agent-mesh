@@ -18,6 +18,7 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$ROOT/agent-mesh"
 FILTER="${1:-}"
+PYTHON_BIN_T=$(command -v python3 || command -v python)
 
 pass=0; fail=0; skipped=0
 CURRENT=""
@@ -317,6 +318,42 @@ if t "install: jedes Framework-Modul steht in install.sh"; then
     grep -q "[ \\\\]$b\\b" "$ROOT/install.sh" || missing="$missing $b"
   done
   [ -z "$missing" ] && ok || no "würde neu installierten Agents fehlen:$missing"
+fi
+
+# ════════════════ Hermes-Distribution ════════════════
+# Das Repo ist zugleich eine Hermes-Profil-Distribution: `hermes profile
+# install github.com/moinsen-dev/agent-mesh` richtet einen fertigen Mesh-Agenten
+# ein. Diese Tests halten das Manifest an den Quellen fest — eine Distribution,
+# die auf eine Datei zeigt, die es nicht gibt, faellt sonst erst auf der
+# Maschine des Empfaengers auf.
+echo ""
+echo "Hermes-Distribution"
+
+if t "distribution: Version stimmt mit VERSION ueberein"; then
+  dv=$(grep '^version:' "$ROOT/distribution.yaml" | head -1 | awk '{print $2}')
+  assert_eq "$dv" "$(cat "$ROOT/VERSION")"
+fi
+
+if t "distribution: jeder deklarierte Pfad existiert wirklich"; then
+  missing=""
+  for rel in $(sed -n '/^distribution_owned:/,/^[a-z_]*:/p' "$ROOT/distribution.yaml" \
+               | grep -E '^  - ' | sed 's/^  - //; s#/$##'); do
+    [ -e "$ROOT/$rel" ] || missing="$missing $rel"
+  done
+  [ -z "$missing" ] && ok || no "im Manifest, aber nicht im Repo:$missing"
+fi
+
+if t "distribution: der Cron-Job zeigt auf ein vorhandenes Skript"; then
+  scr=$("$PYTHON_BIN_T" -c "import json;print(json.load(open('$ROOT/cron/jobs.json'))['jobs'][0]['script'])" 2>/dev/null)
+  if [ -n "$scr" ] && [ -f "$ROOT/scripts/$scr" ]; then ok
+  else no "cron/jobs.json verweist auf scripts/${scr:-?}, das es nicht gibt"; fi
+fi
+
+if t "distribution: der Skill traegt die Frontmatter, die Hermes braucht"; then
+  f="$ROOT/skills/agent-mesh/SKILL.md"
+  if head -1 "$f" | grep -x -- '---' >/dev/null && grep -q '^name: agent-mesh$' "$f" && grep -q '^description: ' "$f"; then
+    ok
+  else no "SKILL.md ohne gueltige Frontmatter (name/description)"; fi
 fi
 
 # ════════════════ Ergebnis ════════════════
