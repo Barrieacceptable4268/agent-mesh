@@ -23,7 +23,7 @@
 # Datei im Klon sagt, welche Version geholt wurde, nicht welche installiert
 # ist. Genau diese Verwechslung hat die Flotte schon zweimal grün aussehen
 # lassen, während der alte Stand lief. Der CI-Check hält beide Werte gleich.
-AGENT_MESH_VERSION="1.28.1"
+AGENT_MESH_VERSION="1.29.0"
 
 # ── Die Registry ───────────────────────────────────────────────────────────
 # Ein Datensatz pro Kommando:  gruppe|name|argumente|kurztext
@@ -42,7 +42,7 @@ NACHRICHT|inbox||Eigene Mailbox lesen
 NACHRICHT|reply|<msg-id> <text>|Antworten — das Original wird selbst gefunden
 NACHRICHT|route|<agent> <text>|Nur Hub: eine Nachricht weiterleiten
 NACHRICHT|role|<rolle>|Eigene Rolle setzen: hub, worker oder specialist
-NACHRICHT|respond||Eingegangene Nachrichten automatisch beantworten
+NACHRICHT|respond||Eingegangene Nachrichten vom lokalen Hermes-Agenten beantworten lassen
 VAULT|vault|<unterkommando>|Verschlüsselte Secrets — set, get, list, add-key, revoke, pins, repin
 VAULT|insight|add <text>|Eine Erkenntnis mit allen teilen (Markdown)
 BETRIEB|converge||EIN idempotenter Abgleich: Soll-Zustand herstellen und melden
@@ -291,6 +291,29 @@ D
   Die Nachricht wird für die Empfänger verschlüsselt und signiert und über
   das private Repo zugestellt — keine offenen Ports, keine Serverkomponente.
   Läuft ein Relay, kommt sie in Sekunden an, sonst beim nächsten converge.
+D
+;;
+    respond) cat << 'D'
+  Reicht jede signaturgeprüfte Frage an den Hermes-Agenten DIESER Maschine
+  weiter und schickt dessen Antwort zurück. Der Agent kennt die Maschine, sein
+  Gedächtnis und seine Werkzeuge — vorher beantwortete ein zustandsloses
+  Sprachmodell ohne all das im Namen des Agenten, und erfand dabei Zustände.
+
+  Antwortet kein Hermes, sagt der Verbund genau das. Es gibt keinen Rückfall
+  auf ein Modell ohne Kontext: eine erfundene Antwort ist schlimmer als keine.
+
+  In agent-mesh.conf:
+    AGENT_MESH_AUTO_RESPOND=0        gar nicht automatisch antworten
+    AGENT_MESH_HERMES_TOOLSETS=...   Default `safe` — Hermes' Zusammenstellung
+                                     OHNE Terminal-, Datei- und Cron-Zugriff
+    AGENT_MESH_HERMES_TIMEOUT=180    Sekunden
+
+  Warum `safe` die Voreinstellung ist: `hermes -z` umgeht Freigaben. Fremden
+  Text ungefiltert in einen Agenten mit Terminal zu geben, wäre die
+  Fernsteuerung, die dieses Projekt sonst ausschliesst. Das Gedächtnis bleibt
+  trotzdem da — Memory-Injection legt es in den Systemprompt, zum Lesen braucht
+  es kein Werkzeug. Weiter aufmachen (z.B. `hermes-cli`) ist eine bewusste
+  Entscheidung pro Maschine, wie bei doctor --fix.
 D
 ;;
     role) cat << 'D'

@@ -27,6 +27,7 @@
 | `agent-mesh doctor [--vault\|--net\|--security\|--fix]` | Preflight and security checks with repair hints |
 | `agent-mesh report [--json]` | One compact, copy-pasteable state report — version, installs, trust base, keys, open findings |
 | `agent-mesh maintenance [--dry-run]` | Tell every agent to bring itself up to date — a signal, not a remote command |
+| `agent-mesh respond` | Let the machine's own Hermes agent answer incoming questions — no context-free model speaking in its name |
 | `agent-mesh fleet` | Hub view: every agent's state, gathered from the reports they publish on sync |
 | `agent-mesh vault pins` | Show pinned recipient keys and any drift |
 | `agent-mesh vault repin <agent>` | Accept a genuine key change after out-of-band verification |
@@ -50,3 +51,24 @@ A heartbeat is not a change: a state report whose only difference is its
 timestamp is no longer published. Before v1.28.0 it was, so every sync made
 every other agent sync, and six agents kept each other permanently busy over
 nothing.
+
+## The agent already on the machine
+
+Until v1.28.1 an incoming message was answered by a stateless chat completion
+whose prompt contained nothing but the message text — no machine, no memory,
+no tools — and which was told to *play* the agent. The only substantive answer
+the mesh ever produced was "Sync is running, hub confirmed." It could not have
+known that. It said it anyway.
+
+Every machine already runs an agent that can answer. It was never asked.
+`respond` now hands the question to the local Hermes agent and returns what it
+says. If no Hermes answers, the mesh says so — there is no fallback to a model
+without context, because an invented answer is worse than none.
+
+The default toolset is `safe` — Hermes' own set without terminal, file or cron
+access — because `hermes -z` bypasses approvals, and feeding foreign text to a
+tool-enabled agent would be exactly the remote control this project's signature
+chain exists to prevent. Memory still reaches the agent: injection puts it in
+the system prompt, and reading it needs no tool. Widening the set
+(`AGENT_MESH_HERMES_TOOLSETS=hermes-cli`) is a deliberate, per-machine choice —
+the same separation as `doctor --fix`.

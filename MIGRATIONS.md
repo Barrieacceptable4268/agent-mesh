@@ -6,6 +6,48 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.29.0
+
+**The mesh stops speaking for its agents and starts asking them.**
+
+Nothing to do by hand. One thing is worth a deliberate decision, and it is
+named at the end.
+
+Until now, an incoming message was answered by a stateless chat completion
+with a 150-token limit, whose prompt contained nothing but the message text.
+No access to the machine, no memory, no tools — and the instruction to *play*
+the agent (`"Du bist der Agent X"`). The only substantive answer the mesh has
+ever produced, on 2026-08-22, was *"Verstanden! Bin da — Sync läuft, Hub
+bestätigt."* It could not have known whether its sync was running. It said so
+anyway.
+
+That made this the generator of exactly the kind of statement the rest of the
+project fights with `report --json` and `fleet`: fluent, unverifiable, wrong.
+Meanwhile every machine runs an agent that can answer the question — it was
+simply never asked. Asked directly, the same question about this machine
+returned the running version, the process id and the loaded service, each with
+its evidence.
+
+So `respond` now hands the question to the local Hermes agent. If none answers,
+the mesh says that. There is no fallback to a model without context.
+
+**The deliberate decision:** `hermes -z` bypasses approvals. Handing foreign
+text to an agent with terminal access would be precisely the remote control
+this project's whole signature apparatus exists to prevent. The default toolset
+is therefore `safe` — Hermes' own set without terminal, file or cron access.
+Memory still reaches the agent, because injection puts it in the system prompt
+and reading it needs no tool; only *writing* would.
+
+With that default, an agent answers operational questions with "I don't know"
+rather than a plausible fabrication. That is the intended behaviour. If you
+want your agents to inspect their own machine, open it per machine and on
+purpose:
+
+    AGENT_MESH_HERMES_TOOLSETS=hermes-cli    in agent-mesh.conf
+
+Same separation as `doctor --fix`: what is provably harmless runs by itself,
+anything needing judgement stays a human decision.
+
 ## v1.28.1
 
 Nothing to do. Umlauts restored in the `fleet` and `doctor` output that
