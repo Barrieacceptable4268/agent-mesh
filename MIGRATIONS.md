@@ -6,6 +6,44 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.32.0
+
+**Optional, and the answer to "should the mesh have a database".** It should —
+and Hermes already has the slot for one, so we fill it rather than build it.
+
+Shared knowledge has so far meant copying MEMORY.md files into a git repo. That
+is not queryable, and until v1.29.0 nothing read them: six agents produced 19 MB
+of repository and 11,195 commits to move about 6 KB of text.
+
+`agent-mesh memory` points every agent at one mem0 server instead. Server-side
+fact extraction, semantic search, deduplication — and the identities are what
+make it a *mesh* memory rather than six private ones:
+
+    user_id  = the human     — the same for every agent, so it is one memory
+    agent_id = the machine   — so you can still see who contributed what
+
+    agent-mesh memory setup --host https://memory.example --key <k>   # once
+    agent-mesh memory join                                            # per machine
+    agent-mesh memory status
+
+What agent-mesh contributes is the hard part: getting the key onto six machines
+safely. The vault encrypts it for **named** recipients, pins their keys, and
+treats any change as an event. Hermes does the rest.
+
+Nothing is written until the server has proven itself — `setup` and `join` both
+run the exact call Hermes' self-hosted backend makes and refuse to record
+anything if it does not answer correctly. A memory that does not respond is
+worse than none: the agent only notices when it searches, and then it looks
+like it knows nothing. The four outcomes are distinguished by exit code:
+reachable (0), key rejected (2), not a mem0 server (3), nothing there (4).
+
+Why a central server suits this fleet in particular: it must be reachable from
+every agent, but no agent has to be reachable. That is what lets machines
+behind NAT take part, and it is exactly what peer-to-peer cannot do here.
+
+Server recipe: `deploy/memory-server.md`. This changes nothing until you run
+it — without a configured server every agent keeps using built-in MEMORY.md.
+
 ## v1.31.0
 
 **Run `agent-mesh service install` once on every machine.** It replaces the

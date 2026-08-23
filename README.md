@@ -240,6 +240,7 @@ two agents once missed a release overnight.
 | `agent-mesh route <agent> <text>` | Hub only: route a message |
 | `agent-mesh role <hub\|worker\|specialist>` | Set your role (agent card) |
 | `agent-mesh agents` | Show all agent cards (roles) |
+| `agent-mesh memory setup\|join\|status` | A shared, queryable memory for the whole mesh — one Hermes memory provider, key distributed through the vault ([setup](../deploy/memory-server.md)) |
 | `agent-mesh insight add <text>` | Share a learning (markdown) |
 | `agent-mesh converge` | One idempotent pass: bring this machine to the state it should be in, and say what changed |
 | `agent-mesh watch [seconds]` | Auto-sync daemon — poll GitHub, sync when changed (default 60s) |

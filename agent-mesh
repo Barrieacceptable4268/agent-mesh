@@ -68,6 +68,9 @@ if ! type cli_is_command >/dev/null 2>&1; then
   cli_version()  { echo "agent-mesh (Version unbekannt — agent-mesh-cli.sh fehlt)"; }
   cli_unknown()  { echo "❌ Unbekanntes Kommando: '${1:-}'" >&2; }
 fi
+# Memory-Modul (gemeinsames Gedächtnis über einen Hermes-Memory-Provider)
+MEMORY_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-memory.sh"
+[ -f "$MEMORY_MODULE" ] && source "$MEMORY_MODULE"
 # A2A-Modul (Agent-to-Agent, Rollen, Hub-Routing) einbinden
 A2A_MODULE="$(dirname "$(readlink -f "$0")")/agent-mesh-a2a.sh"
 [ -f "$A2A_MODULE" ] && source "$A2A_MODULE"
@@ -874,6 +877,7 @@ case "${1:-}" in
   trust)   shift; cmd_trust "$@" ;;
   status)  shift; cmd_status ;;
   converge) shift; cmd_converge "$@" ;;
+  memory)  shift; cmd_memory "$@" ;;
   # Ohne Argument: die Übersicht, nicht eine Zeile Usage. Der Exit-Code bleibt
   # 1 — ein Aufruf ohne Kommando hat nichts getan, und Skripte, die das bisher
   # geprüft haben, sollen weiter funktionieren.

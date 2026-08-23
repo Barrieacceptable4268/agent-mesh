@@ -26,6 +26,7 @@ CURRENT=""
 # Jeder Test läuft in einem eigenen, leeren AGENT_MESH_HOME. Kein Test darf
 # die echte Installation des Entwicklers sehen oder verändern.
 SANDBOX=$(mktemp -d)
+# Wird weiter unten um das Beenden der Test-Server erweitert.
 trap 'rm -rf "$SANDBOX"' EXIT
 export AGENT_MESH_HOME="$SANDBOX/home"
 mkdir -p "$AGENT_MESH_HOME"
@@ -185,6 +186,7 @@ echo "Zustandsbericht (report_is_news)"
 # Das Hauptskript sourcen, ohne den Dispatcher zu starten.
 # shellcheck disable=SC1090
 source "$BIN" 2>/dev/null || true
+set +e
 
 mk() { # mk <datei> <ts> <version>
   printf '{"ts":"%s","agent":"t","version":"%s","bad":0}\n' "$2" "$3" > "$1"
@@ -238,6 +240,7 @@ echo "Antworten (Responder)"
 
 # shellcheck disable=SC1090
 source "$ROOT/agent-mesh-responder.sh" 2>/dev/null || true
+set +e
 AGENT_NAME="testagent"
 
 if t "responder: ohne Hermes wird gesagt, dass niemand antwortet"; then
@@ -318,6 +321,98 @@ if t "install: jedes Framework-Modul steht in install.sh"; then
     grep -q "[ \\\\]$b\\b" "$ROOT/install.sh" || missing="$missing $b"
   done
   [ -z "$missing" ] && ok || no "würde neu installierten Agents fehlen:$missing"
+fi
+
+# ════════════════ Gemeinsames Gedächtnis ════════════════
+# Die eine Zusicherung, die hier zählt: es wird NICHTS eingetragen, solange der
+# Server sich nicht als brauchbar erwiesen hat. Ein Gedächtnis, das nicht
+# antwortet, merkt ein Agent sonst erst, wenn er etwas sucht — und dann sieht
+# es aus, als wüsste er nichts.
+echo ""
+echo "Gemeinsames Gedächtnis"
+
+# Ein Server, der genau den Vertrag von Hermes' SelfHostedBackend erfüllt, und
+# einer, der es nicht tut. Beide nur für die Dauer dieser Tests.
+cat > "$SANDBOX/stub.py" << 'STUB'
+import json, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+KEY = sys.argv[2] if len(sys.argv) > 2 else ""
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        if KEY and self.headers.get("X-API-Key") != KEY:
+            self.send_response(401); self.end_headers(); return
+        if self.path not in ("/search", "/memories"):
+            self.send_response(404); self.end_headers(); return
+        out = b'{"results": []}'
+        self.send_response(200); self.send_header("Content-Length", str(len(out)))
+        self.end_headers(); self.wfile.write(out)
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+STUB
+cat > "$SANDBOX/wrong.py" << 'WRONG'
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self): self.send_response(404); self.end_headers()
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+WRONG
+"$PYTHON_BIN_T" "$SANDBOX/stub.py"  18791 meshtestkey & STUB_PID=$!
+"$PYTHON_BIN_T" "$SANDBOX/wrong.py" 18792 & WRONG_PID=$!
+trap 'kill $STUB_PID $WRONG_PID 2>/dev/null; wait $STUB_PID $WRONG_PID 2>/dev/null; rm -rf "$SANDBOX"' EXIT
+# Kurz warten, bis beide horchen — sonst prüft der erste Test das Hochfahren.
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  "$PYTHON_BIN_T" -c "import socket,sys; s=socket.socket(); sys.exit(0 if s.connect_ex(('127.0.0.1',18791))==0 else 1)" 2>/dev/null && break
+  sleep 0.3
+done
+
+# shellcheck disable=SC1090
+PYTHON_BIN="$PYTHON_BIN_T"
+source "$ROOT/agent-mesh-memory.sh" 2>/dev/null || true
+# Die gesourcten Module setzen `set -euo pipefail`. Eine Testsuite braucht das
+# Gegenteil: sie MUSS weiterlaufen, wenn ein geprüfter Aufruf fehlschlägt —
+# sonst endet sie beim ersten erwarteten Fehlerfall und meldet den Rest gar
+# nicht erst. (Genau so verschwanden hier fünf Tests spurlos.)
+set +e
+
+if t "gedaechtnis: ein passender Server wird angenommen"; then
+  mem_probe "http://127.0.0.1:18791" "meshtestkey" >/dev/null 2>&1 && ok     || no "brauchbarer Server wurde abgelehnt"
+fi
+
+if t "gedaechtnis: ein falscher Schluessel wird als solcher benannt"; then
+  out=$(mem_probe "http://127.0.0.1:18791" "falsch" 2>&1); rc=$?
+  if [ "$rc" = "2" ]; then assert_contains "$out" "Schlüssel"; else no "Exit-Code $rc statt 2"; fi
+fi
+
+if t "gedaechtnis: ein fremder Server wird nicht fuer mem0 gehalten"; then
+  out=$(mem_probe "http://127.0.0.1:18792" "meshtestkey" 2>&1); rc=$?
+  if [ "$rc" = "3" ]; then assert_contains "$out" "kein mem0-Server"; else no "Exit-Code $rc statt 3"; fi
+fi
+
+if t "gedaechtnis: ein toter Port wird nicht als Server gezaehlt"; then
+  mem_probe "http://127.0.0.1:18799" "x" >/dev/null 2>&1
+  assert_eq "$?" "4"
+fi
+
+if t "gedaechtnis: setup traegt nichts ein, wenn der Server nicht taugt"; then
+  # Die eigentliche Sicherheitszusage. Schlaegt die Pruefung fehl, darf weder
+  # im Verbund noch im Vault etwas landen — sonst schickt ein Hub fuenf Agenten
+  # zu einem Server, den es nicht gibt.
+  body=$(sed -n '/^mem_setup() {/,/^}/p' "$ROOT/agent-mesh-memory.sh")
+  probe_line=$(printf '%s\n' "$body" | grep -n 'mem_probe' | head -1 | cut -d: -f1)
+  vault_line=$(printf '%s\n' "$body" | grep -n 'cmd_vault_set' | head -1 | cut -d: -f1)
+  conf_line=$(printf '%s\n' "$body" | grep -n 'mesh_memory_conf' | tail -1 | cut -d: -f1)
+  if [ -n "$probe_line" ] && [ -n "$vault_line" ] && [ "$probe_line" -lt "$vault_line" ] \
+     && [ -n "$conf_line" ] && [ "$probe_line" -lt "$conf_line" ]; then ok
+  else no "die Serverpruefung steht nicht VOR dem Schreiben (probe:$probe_line vault:$vault_line conf:$conf_line)"; fi
+fi
+
+if t "gedaechtnis: join schreibt den Schluessel, ohne alte Zeilen zu haeufen"; then
+  # Bei jedem join eine weitere MEM0_API_KEY-Zeile anzuhaengen hiesse: welcher
+  # Schluessel gilt, haengt davon ab, wer die Datei liest.
+  body=$(sed -n '/^mem_join() {/,/^}/p' "$ROOT/agent-mesh-memory.sh")
+  printf '%s\n' "$body" | grep 'grep -v "\^MEM0_API_KEY="' >/dev/null && ok \
+    || no "join haengt den Schluessel an, statt die Zeile zu ersetzen"
 fi
 
 # ════════════════ Dienst ════════════════

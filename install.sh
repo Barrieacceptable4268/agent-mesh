@@ -59,6 +59,7 @@ say "Lade Framework vom public Repo ($REPO@$BRANCH)…"
 # ein neues Modul, das hier fehlt, lässt die CI scheitern statt erst den
 # nächsten frisch installierten Agent.
 for f in agent-mesh agent-mesh-cli.sh agent-mesh-a2a.sh agent-mesh-update.sh \
+         agent-mesh-memory.sh \
          agent-mesh-webhook.py \
          agent-mesh-watch.sh agent-mesh-connect.sh agent-mesh-doctor.sh \
          agent-mesh-responder.sh agent-mesh-service.sh agent-mesh-govern.sh \

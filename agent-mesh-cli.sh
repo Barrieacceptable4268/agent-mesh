@@ -23,7 +23,7 @@
 # Datei im Klon sagt, welche Version geholt wurde, nicht welche installiert
 # ist. Genau diese Verwechslung hat die Flotte schon zweimal grün aussehen
 # lassen, während der alte Stand lief. Der CI-Check hält beide Werte gleich.
-AGENT_MESH_VERSION="1.31.0"
+AGENT_MESH_VERSION="1.32.0"
 
 # ── Die Registry ───────────────────────────────────────────────────────────
 # Ein Datensatz pro Kommando:  gruppe|name|argumente|kurztext
@@ -44,6 +44,7 @@ NACHRICHT|route|<agent> <text>|Nur Hub: eine Nachricht weiterleiten
 NACHRICHT|role|<rolle>|Eigene Rolle setzen: hub, worker oder specialist
 NACHRICHT|respond||Eingegangene Nachrichten vom lokalen Hermes-Agenten beantworten lassen
 VAULT|vault|<unterkommando>|Verschlüsselte Secrets — set, get, list, add-key, revoke, pins, repin
+VAULT|memory|<unterkommando>|Gemeinsames Gedächtnis des Verbunds — setup, join, status, off
 VAULT|insight|add <text>|Eine Erkenntnis mit allen teilen (Markdown)
 BETRIEB|converge||EIN idempotenter Abgleich: Soll-Zustand herstellen und melden
 BETRIEB|watch|[sekunden]|Dauerlauf: converge alle N Sekunden (Default 60)
@@ -285,6 +286,31 @@ D
   Ein gepinnter Schlüssel, der sich ändert, wird nie still übernommen: das
   ist entweder ein legitimer Wechsel oder ein Angreifer, der sich selbst zum
   Empfänger macht. Vorher über einen zweiten Kanal abgleichen.
+D
+;;
+    memory) cat << 'D'
+  setup --host <url> [--key <k>]   einmal am Hub: Server prüfen und bekanntgeben
+  join                             auf jedem Agenten: den lokalen Hermes verdrahten
+  status                           wer nutzt was, und antwortet der Server
+  off                              zurück auf das eingebaute MEMORY.md
+
+  Geteiltes Wissen war bisher das Kopieren von Dateien in ein Git-Repo — nicht
+  abfragbar, und bis v1.29.0 hat es ohnehin niemand gelesen. Hermes hat für
+  externe Gedächtnisse einen vorgesehenen Steckplatz; dieses Kommando füllt
+  ihn mit einem mem0-Server, den alle Agenten gemeinsam nutzen.
+
+  Die Aufteilung ist das Wesentliche:
+    user_id  = der MENSCH     — für alle Agenten derselbe, also ein Gedächtnis
+    agent_id = die MASCHINE   — man sieht trotzdem, wer was beigetragen hat
+
+  agent-mesh steuert dabei den schweren Teil bei: den API-Schlüssel per Vault
+  verschlüsselt an benannte Empfänger zu verteilen. Und es fragt den Server,
+  bevor es etwas einträgt — ein Gedächtnis, das nicht antwortet, ist schlimmer
+  als keins, weil der Agent es erst merkt, wenn er etwas sucht.
+
+  Warum ausgerechnet das im Verbund funktioniert: der Server muss erreichbar
+  sein, die Agenten nicht. Genau daran scheitert peer-to-peer bei Maschinen
+  hinter NAT.
 D
 ;;
     send|broadcast) cat << 'D'
