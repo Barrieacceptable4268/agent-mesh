@@ -189,6 +189,14 @@ cmd_converge() {
     fi
   fi
 
+  # Ein Lebenszeichen bei JEDEM Lauf — auch wenn nichts zu tun war. Seit der
+  # Dienst ein Intervall ist, gibt es keinen Prozess mehr, an dem man sehen
+  # könnte, ob dieser Agent noch zuhört. Ohne diese Marke hat `doctor` genau
+  # das getan, was dieses Projekt sonst bekämpft: eine wahr klingende
+  # Falschaussage — "kein watch-Prozess" über eine Maschine, die im
+  # Minutentakt konvergiert.
+  date -u +%s > "$AGENT_MESH_HOME/.last-converge" 2>/dev/null || true
+
   [ "$changed" = "0" ] && [ "$quiet" = "0" ] && echo "✅ Soll-Zustand — nichts zu tun (v$have)"
   return "$failed"
 }

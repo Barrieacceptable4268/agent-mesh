@@ -463,6 +463,50 @@ if t "dienst: ein unsinniges Intervall wird abgelehnt, bevor etwas geschrieben w
   ) && ok || no "unsinniges Intervall wurde nicht abgewiesen"
 fi
 
+# ════════════════ Lebenszeichen ════════════════
+# Seit der Dienst ein Intervall ist, gibt es keinen Prozess mehr, an dem man
+# ablesen könnte, ob ein Agent zuhört. Der Doktor suchte trotzdem weiter nach
+# `agent-mesh watch` und meldete eine im Minutentakt konvergierende Maschine
+# als still — wahr klingend und falsch, also genau das, wogegen dieses Projekt
+# gebaut ist. Geprüft wird jetzt die Marke, die converge selbst hinterlässt.
+echo ""
+echo "Lebenszeichen"
+
+# shellcheck disable=SC1090
+source "$ROOT/agent-mesh-doctor.sh" 2>/dev/null || true
+set +e
+
+if t "lebenszeichen: eine frische Marke zählt als zuhörend"; then
+  mkdir -p "$SANDBOX/live"
+  date -u +%s > "$SANDBOX/live/.last-converge"
+  assert_eq "$(converge_liveness "$SANDBOX/live")" "ja"
+fi
+
+if t "lebenszeichen: eine alte Marke zählt nicht"; then
+  mkdir -p "$SANDBOX/stale"
+  echo "1000000000" > "$SANDBOX/stale/.last-converge"
+  assert_eq "$(converge_liveness "$SANDBOX/stale")" "nein"
+fi
+
+if t "lebenszeichen: ohne Marke und ohne Prozess ist die Antwort nein"; then
+  mkdir -p "$SANDBOX/empty"
+  assert_eq "$(converge_liveness "$SANDBOX/empty")" "nein"
+fi
+
+if t "lebenszeichen: eine unsinnige Marke wird nicht als frisch gelesen"; then
+  mkdir -p "$SANDBOX/junk"
+  printf 'irgendwas\n' > "$SANDBOX/junk/.last-converge"
+  assert_eq "$(converge_liveness "$SANDBOX/junk")" "nein"
+fi
+
+if t "lebenszeichen: converge hinterlässt die Marke bei JEDEM Lauf"; then
+  # Auch wenn nichts zu tun war — sonst sähe eine ruhige, gesunde Maschine
+  # nach einer Stunde aus wie eine tote.
+  body=$(sed -n '/^cmd_converge() {/,/^}/p' "$ROOT/agent-mesh-watch.sh")
+  printf '%s\n' "$body" | grep 'last-converge' >/dev/null && ok \
+    || no "converge schreibt kein Lebenszeichen"
+fi
+
 # ════════════════ Hermes-Distribution ════════════════
 # Das Repo ist zugleich eine Hermes-Profil-Distribution: `hermes profile
 # install github.com/moinsen-dev/agent-mesh` richtet einen fertigen Mesh-Agenten

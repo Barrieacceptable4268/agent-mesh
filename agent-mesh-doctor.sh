@@ -229,12 +229,12 @@ security_checks() {
   # es nie. Am 2026-08-22 haben genau deshalb zwei Agents ein Release über
   # Nacht verpasst: kein Watcher, kein Update, keine Nachricht — und nichts,
   # das gesagt hätte, dass dort niemand mehr zuhört.
-  if pgrep -f "[a]gent-mesh watch" >/dev/null 2>&1; then
-    pass "watch läuft — dieser Agent bekommt Updates und Nachrichten mit"
+  if [ "$(converge_liveness "${AGENT_MESH_HOME:-$HOME/.agent-mesh}")" = "ja" ]; then
+    pass "Konvergenz läuft — dieser Agent bekommt Updates und Nachrichten mit"
   else
-    bad "Kein watch-Prozess — dieser Agent hört nicht zu"
+    bad "Seit über $((CONVERGE_STALE_AFTER / 60)) Minuten keine Konvergenz — dieser Agent hört nicht zu"
     note "Ein stiller Agent verpasst Updates, Nachrichten und Wartungssignale."
-    note "Einrichten (startet nach Absturz und Neustart von selbst):"
+    note "Einrichten (ein Intervall, kein Prozess, der sterben kann):"
     note "  agent-mesh service install && agent-mesh service status"
   fi
 
@@ -323,7 +323,9 @@ report_facts() {
   fi
 
   [ -f "$conf" ] && grep "^AGENT_MESH_RELAY_TOKEN=" "$conf" >/dev/null 2>&1 && R_TOKEN="ja"
-  pgrep -f "[a]gent-mesh watch" >/dev/null 2>&1 && R_WATCHER="ja"
+  # Zuhören heisst nicht mehr "ein Prozess läuft", sondern "es wurde vor
+  # Kurzem konvergiert" — der Dienst ist seit v1.31.0 ein Intervall.
+  R_WATCHER=$(converge_liveness "$home")
 
   if [ -f "$conf" ]; then
     local out
@@ -332,6 +334,25 @@ report_facts() {
     R_BAD=$(printf '%s\n' "$out" | grep -c "❌" || true)
     R_ISSUES=$(printf '%s\n' "$out" | grep "❌" | sed 's/^ *//' | head -8 || true)
   fi
+}
+
+# Wann hat dieser Agent zuletzt konvergiert? "ja" / "nein".
+# Ein Dauerprozess zählt weiter mit — es gibt Maschinen, auf denen noch
+# `agent-mesh watch` im Vordergrund läuft, und die hören sehr wohl zu.
+CONVERGE_STALE_AFTER="${AGENT_MESH_CONVERGE_STALE:-900}"   # Sekunden
+converge_liveness() {
+  local home="${1:-$AGENT_MESH_HOME}" mark="${1:-$AGENT_MESH_HOME}/.last-converge"
+  if [ -f "$mark" ]; then
+    local then_s now_s
+    then_s=$(cat "$mark" 2>/dev/null || echo 0)
+    now_s=$(date -u +%s)
+    case "$then_s" in
+      ''|*[!0-9]*) ;;
+      *) [ "$((now_s - then_s))" -lt "$CONVERGE_STALE_AFTER" ] && { echo "ja"; return 0; } ;;
+    esac
+  fi
+  pgrep -f "[a]gent-mesh watch" >/dev/null 2>&1 && { echo "ja"; return 0; }
+  echo "nein"
 }
 
 # ── agent-mesh doctor --fix ────────────────────────────────────────────────

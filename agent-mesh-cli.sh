@@ -23,7 +23,7 @@
 # Datei im Klon sagt, welche Version geholt wurde, nicht welche installiert
 # ist. Genau diese Verwechslung hat die Flotte schon zweimal grün aussehen
 # lassen, während der alte Stand lief. Der CI-Check hält beide Werte gleich.
-AGENT_MESH_VERSION="1.32.0"
+AGENT_MESH_VERSION="1.32.1"
 
 # ── Die Registry ───────────────────────────────────────────────────────────
 # Ein Datensatz pro Kommando:  gruppe|name|argumente|kurztext

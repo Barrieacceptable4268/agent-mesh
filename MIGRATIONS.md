@@ -6,6 +6,22 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.32.1
+
+**A regression v1.31.0 caused, found by the fleet view within minutes.**
+
+Making the service an interval removed the resident `agent-mesh watch`
+process — deliberately. But `doctor` still looked for that process to decide
+whether an agent was listening, so a machine converging every sixty seconds
+reported "no watch process — this agent is not listening". True-sounding,
+verifiable as false, and exactly what the rest of this project exists to
+prevent.
+
+Liveness is no longer "a process exists" but "it converged recently":
+`converge` now leaves a mark on every run, including runs where nothing needed
+doing, and `doctor` and `report` read that mark. A still-running foreground
+`watch` continues to count.
+
 ## v1.32.0
 
 **Optional, and the answer to "should the mesh have a database".** It should —
