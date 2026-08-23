@@ -320,6 +320,54 @@ if t "install: jedes Framework-Modul steht in install.sh"; then
   [ -z "$missing" ] && ok || no "würde neu installierten Agents fehlen:$missing"
 fi
 
+# ════════════════ Dienst ════════════════
+# Drei Plattformen, drei Gründe, aus denen ein Dauerprozess stirbt — und ein
+# Intervall, das keinen davon hat. Diese Tests halten jeden einzelnen fest.
+echo ""
+echo "Dienst (Intervall statt Dauerprozess)"
+
+SVC="$ROOT/agent-mesh-service.sh"
+
+if t "dienst: macOS läuft über StartInterval, nicht über einen Dauerprozess"; then
+  # KeepAlive hält einen Prozess am Leben, solange der Nutzer angemeldet ist.
+  # Über Ruhezustand und Abmeldung hilft nur ein Intervall.
+  if grep -q 'StartInterval' "$SVC" && ! grep -q '<key>KeepAlive</key>' "$SVC"; then ok
+  else no "plist ohne StartInterval oder wieder mit KeepAlive"; fi
+fi
+
+if t "dienst: Windows wiederholt sich, statt nur bei der Anmeldung zu starten"; then
+  # /SC ONLOGON hiess auf einem Server, an dem sich nie jemand anmeldet: nie.
+  if grep -q '//SC MINUTE' "$SVC" && ! grep -q '//Create .*//SC ONLOGON' "$SVC"; then ok
+  else no "Task wieder an die Anmeldung gebunden"; fi
+fi
+
+if t "dienst: der systemd-Timer holt verpasste Läufe nach"; then
+  if grep -q 'Persistent=true' "$SVC"; then ok
+  else no "ohne Persistent=true bleibt eine durchschlafene Nacht eine Lücke"; fi
+fi
+
+if t "dienst: aufgerufen wird converge, nicht die Endlosschleife"; then
+  if grep -q 'converge --quiet' "$SVC" && ! grep -qE 'ExecStart=.* watch |agent-mesh watch \$interval' "$SVC"; then ok
+  else no "der Dienst startet wieder einen residenten watch"; fi
+fi
+
+if t "dienst: die alte Dauer-Unit wird beim Umstieg abgeräumt"; then
+  # Sonst laufen Schleife und Timer nebeneinander und synchronisieren doppelt.
+  body=$(sed -n '/^svc_install() {/,/^}/p' "$SVC")
+  if printf '%s\n' "$body" | grep '  retire_legacy_unit$' >/dev/null; then ok
+  else no "svc_install räumt die alte agent-mesh-watch.service nicht ab"; fi
+fi
+
+if t "dienst: ein unsinniges Intervall wird abgelehnt, bevor etwas geschrieben wird"; then
+  # shellcheck disable=SC1090
+  ( source "$SVC" 2>/dev/null
+    AGENT_MESH_HOME="$SANDBOX/home"
+    out=$(svc_install --interval zwoelf 2>&1); rc=$?
+    [ "$rc" != "0" ] || exit 1
+    case "$out" in *Zahl*) exit 0 ;; *) exit 1 ;; esac
+  ) && ok || no "unsinniges Intervall wurde nicht abgewiesen"
+fi
+
 # ════════════════ Hermes-Distribution ════════════════
 # Das Repo ist zugleich eine Hermes-Profil-Distribution: `hermes profile
 # install github.com/moinsen-dev/agent-mesh` richtet einen fertigen Mesh-Agenten

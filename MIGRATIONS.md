@@ -6,6 +6,40 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.31.0
+
+**Run `agent-mesh service install` once on every machine.** It replaces the
+resident watcher with an interval, and that is the whole point of this release.
+
+Until now the service was a `while true` loop that had to stay alive for the
+agent to notice anything. Every platform had its own way of ending it:
+
+  * **macOS** — a LaunchAgent runs while the user is logged in. Sleep or log
+    out and the process is gone; `KeepAlive` does not carry it across a
+    logout. This is why a Mac went quiet for fourteen hours.
+  * **Windows** — the task was `/SC ONLOGON`. It started the process *once*, at
+    login. If it died, nothing came back until the next login — on a server
+    where nobody ever logs in, that means never.
+  * **Linux** — systemd with `Restart=always` holds up, but only if the service
+    was ever installed. `agent-mesh watch` in a terminal dies with the terminal.
+
+An interval has none of these weaknesses, because there is no process to die.
+The operating system runs `agent-mesh converge` every N seconds; each run is
+idempotent and ends. A missed run makes the next one no less complete, and both
+launchd and a systemd timer with `Persistent=true` catch up after sleep or
+downtime.
+
+    agent-mesh service install            # 60s by default
+    agent-mesh service install --interval 300
+
+Installing now also reports the state afterwards instead of the action, and
+`service status` names the old arrangement where it finds one — a Mac still on
+the resident agent, or a Windows task still bound to logon. On Linux the old
+`agent-mesh-watch.service` is stopped and removed as part of the install, so
+loop and timer never run side by side.
+
+`agent-mesh watch` stays for the foreground, when you want to watch it happen.
+
 ## v1.30.1
 
 Nothing to do. The install instructions advertised pinning a release with

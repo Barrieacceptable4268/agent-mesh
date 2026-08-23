@@ -1,10 +1,38 @@
 #!/usr/bin/env bash
-# agent-mesh-service — plattformübergreifender Service-Manager für den watch.
+# agent-mesh-service — der Dienst, der einen Agenten im Verbund hält.
 #
-# Verwaltet `agent-mesh watch <interval>` als Hintergrund-Dienst:
-#   Linux:   systemd-Unit    (agent-mesh-watch.service)
-#   macOS:   LaunchAgent     (dev.moinsen.agentmesh.watch.plist)
-#   Windows: Task Scheduler  (AgentMesh Watcher, schtasks.exe)
+#   Linux:   systemd-Timer   (agent-mesh-converge.timer + .service)
+#   macOS:   LaunchAgent     (dev.moinsen.agentmesh.watch.plist, StartInterval)
+#   Windows: Task Scheduler  (AgentMesh Watcher, /SC MINUTE)
+#
+# ── Warum das ein INTERVALL ist und kein Dauerprozess ──────────────────────
+#
+# Bis v1.30.1 installierte dieser Manager auf allen drei Plattformen einen
+# residenten `agent-mesh watch` — eine `while true`-Schleife, die laufen muss,
+# damit der Agent überhaupt etwas mitbekommt. Am 22./23.08.2026 standen zwei
+# von sechs Agenten über Nacht still, und jede Plattform hatte ihren eigenen
+# Grund dafür:
+#
+#   macOS    Ein LaunchAgent läuft, solange der Nutzer angemeldet ist. Geht die
+#            Maschine schlafen oder meldet sich jemand ab, ist der Prozess weg;
+#            KeepAlive bringt ihn nicht über eine Abmeldung.
+#   Windows  Die Aufgabe war `/SC ONLOGON` — sie startete den Prozess EINMAL
+#            bei der Anmeldung. Stirbt er, kommt bis zur nächsten Anmeldung
+#            nichts mehr. Auf einem Server, an dem sich nie jemand anmeldet,
+#            heisst das: nie.
+#   Linux    systemd mit Restart=always hält durch — aber nur, wenn der Dienst
+#            überhaupt installiert wurde. Ein `agent-mesh watch` in einem
+#            Terminal stirbt mit dem Terminal.
+#
+# Ein Intervall hat keine dieser Schwächen. Es gibt keinen Prozess, der
+# sterben könnte: Das Betriebssystem ruft alle N Sekunden `agent-mesh converge`
+# auf, das ist ein idempotenter Durchlauf, der endet. Fällt einer aus, ist der
+# nächste dadurch nicht weniger vollständig. Nach Ruhezustand, Abmeldung oder
+# Neustart läuft es weiter, ohne dass jemand etwas tut — launchd holt ein
+# verpasstes Intervall beim Aufwachen nach, systemd mit Persistent=true
+# ebenfalls.
+#
+# `agent-mesh watch` bleibt für den Vordergrund: zusehen, was passiert.
 #
 # Usage:
 #   agent-mesh service install [--interval 60]
@@ -15,12 +43,12 @@
 
 set -euo pipefail
 
-SVC_NAME="agent-mesh-watch"
+SVC_NAME="agent-mesh-converge"
+SVC_LEGACY="agent-mesh-watch"       # der residente Dienst bis v1.30.1
 SVC_LABEL="dev.moinsen.agentmesh.watch"
 WIN_TASK="AgentMesh Watcher"
 INTERVAL="${AGENT_MESH_WATCH_INTERVAL:-60}"
 
-# Plattform erkennen
 os_name() {
   case "$(uname -s 2>/dev/null)" in
     MINGW*|MSYS*|CYGWIN*) echo "windows" ;;
@@ -29,8 +57,21 @@ os_name() {
   esac
 }
 
+# Der Label bzw. Taskname bleibt absichtlich gleich: `launchctl load` und
+# `schtasks /Create /F` ersetzen damit die alte Definition, statt eine zweite
+# danebenzustellen. Unter systemd geht das nicht — dort muss die alte Unit
+# ausdrücklich abgeräumt werden, sonst laufen Schleife und Timer nebeneinander.
+retire_legacy_unit() {
+  command -v systemctl >/dev/null 2>&1 || return 0
+  systemctl list-unit-files 2>/dev/null | grep "$SVC_LEGACY.service" >/dev/null || return 0
+  systemctl stop "$SVC_LEGACY" 2>/dev/null || true
+  systemctl disable "$SVC_LEGACY" 2>/dev/null || true
+  rm -f "/etc/systemd/system/$SVC_LEGACY.service"
+  systemctl daemon-reload 2>/dev/null || true
+  echo "  ✓ alter Dauerdienst $SVC_LEGACY.service abgelöst"
+}
+
 svc_install() {
-  # --interval <n> parsen
   local interval="$INTERVAL"
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -38,47 +79,60 @@ svc_install() {
       *) interval="$1"; shift ;;
     esac
   done
+  case "$interval" in
+    *[!0-9]*|'') echo "❌ Intervall muss eine Zahl sein (Sekunden)"; return 1 ;;
+  esac
+
+  local self; self=$(command -v agent-mesh 2>/dev/null || echo "agent-mesh")
   local os; os=$(os_name)
   case "$os" in
     linux)
-      if command -v systemctl >/dev/null 2>&1; then
-        local unit="/etc/systemd/system/$SVC_NAME.service"
-        # SECURITY (Audit-Befund 11): frueher wurde die Unit nach
-        # /tmp/agent-mesh-watch.service geschrieben und von dort als root nach
-        # /etc/systemd/system kopiert. Zwischen Schreiben und Kopieren konnte
-        # ein lokaler Nutzer die Datei austauschen — oder vorab einen Symlink
-        # dorthin legen — und sich so eine beliebige root-Unit installieren.
-        # Jetzt direkt ans Ziel, ohne Umweg ueber ein world-writable Verzeichnis.
-        if [ ! -w "$(dirname "$unit")" ]; then
-          echo "❌ Keine Rechte für $unit — sudo nötig"
-          return 1
-        fi
-        cat > "$unit" << EOF
+      if ! command -v systemctl >/dev/null 2>&1; then
+        echo "❌ systemd nicht gefunden."
+        echo "   Ersatzweise per cron:  */5 * * * * $self converge --quiet >> $AGENT_MESH_HOME/watch.log 2>&1"
+        return 1
+      fi
+      local unit="/etc/systemd/system/$SVC_NAME.service"
+      local timer="/etc/systemd/system/$SVC_NAME.timer"
+      # SECURITY (Audit-Befund 11): direkt ans Ziel schreiben, nie über /tmp —
+      # zwischen Schreiben und Kopieren könnte ein lokaler Nutzer die Datei
+      # austauschen und sich eine beliebige root-Unit installieren.
+      if [ ! -w "$(dirname "$unit")" ]; then
+        echo "❌ Keine Rechte für $unit — sudo nötig"
+        return 1
+      fi
+      retire_legacy_unit
+      cat > "$unit" << EOF
 [Unit]
-Description=Agent-Mesh Watch (Auto-Sync + Self-Update)
+Description=Agent-Mesh: ein Abgleich mit dem Verbund
 After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=simple
+Type=oneshot
 Environment=HOME=$HOME
 Environment=PATH=/usr/local/bin:/usr/local/lib/hermes-agent/venv/bin:/usr/bin:/bin:/opt/homebrew/bin
-Environment=AGENT_MESH_UPDATE_EVERY=${AGENT_MESH_UPDATE_EVERY:-60}
-ExecStart=$(command -v agent-mesh) watch $interval
-Restart=always
-RestartSec=10
+ExecStart=$self converge --quiet
+EOF
+      cat > "$timer" << EOF
+[Unit]
+Description=Agent-Mesh: Abgleich alle ${interval}s
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=${interval}
+# Verpasste Läufe nach Ausfall oder Neustart nachholen — ohne das wäre ein
+# Rechner, der eine Nacht aus war, danach genauso still wie vorher.
+Persistent=true
+Unit=$SVC_NAME.service
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=timers.target
 EOF
-        chmod 644 "$unit" 2>/dev/null || true
-        systemctl daemon-reload
-        systemctl enable $SVC_NAME >/dev/null 2>&1
-        systemctl restart $SVC_NAME
-        echo "✅ systemd: $SVC_NAME aktiv (watch $interval)"
-      else
-        echo "❌ systemd nicht gefunden — manuell: agent-mesh watch $interval &"
-      fi
+      chmod 644 "$unit" "$timer" 2>/dev/null || true
+      systemctl daemon-reload
+      systemctl enable "$SVC_NAME.timer" >/dev/null 2>&1
+      systemctl restart "$SVC_NAME.timer"
       ;;
     macos)
       local plist="$HOME/Library/LaunchAgents/$SVC_LABEL.plist"
@@ -93,7 +147,7 @@ EOF
   <array>
     <string>/bin/bash</string>
     <string>-lc</string>
-    <string>agent-mesh watch $interval</string>
+    <string>agent-mesh converge --quiet</string>
   </array>
   <key>EnvironmentVariables</key>
   <dict>
@@ -101,7 +155,7 @@ EOF
     <key>PYTHON_BIN</key><string>python3</string>
   </dict>
   <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
+  <key>StartInterval</key><integer>$interval</integer>
   <key>StandardOutPath</key><string>$AGENT_MESH_HOME/watch.log</string>
   <key>StandardErrorPath</key><string>$AGENT_MESH_HOME/watch.log</string>
 </dict>
@@ -109,47 +163,75 @@ EOF
 PLIST
       launchctl unload "$plist" 2>/dev/null || true
       launchctl load "$plist" 2>/dev/null
-      echo "✅ launchd: $SVC_LABEL aktiv (watch $interval)"
       ;;
     windows)
-      # Task Scheduler via schtasks.exe (kein Admin nötig für /SC ONLOGON im User-Kontext)
       local bash_path
       bash_path=$(command -v bash 2>/dev/null || echo "C:\\Program Files\\Git\\bin\\bash.exe")
-      local cmd="\"$bash_path\" -lc \"agent-mesh watch $interval\""
+      local cmd="\"$bash_path\" -lc \"agent-mesh converge --quiet\""
+      # Minuten, nicht Sekunden — und mindestens eine.
+      local mins=$(( interval / 60 )); [ "$mins" -lt 1 ] && mins=1
       if schtasks //Query //TN "$WIN_TASK" >/dev/null 2>&1; then
         schtasks //Delete //TN "$WIN_TASK" //F >/dev/null 2>&1
       fi
-      schtasks //Create //TN "$WIN_TASK" //TR "$cmd" //SC ONLOGON //RL LIMITED //F >/dev/null 2>&1 \
+      # /SC MINUTE statt /SC ONLOGON: die Aufgabe wiederholt sich von selbst.
+      # Mit ONLOGON lief sie auf einem Server, an dem sich nie jemand anmeldet,
+      # genau nie wieder.
+      schtasks //Create //TN "$WIN_TASK" //TR "$cmd" //SC MINUTE //MO "$mins" //RL LIMITED //F >/dev/null 2>&1 \
         || { echo "❌ Task-Scheduler-Anlage fehlgeschlagen"; return 1; }
-      # Sofort starten (ohne auf Logon zu warten)
       schtasks //Run //TN "$WIN_TASK" >/dev/null 2>&1 || true
-      echo "✅ Task Scheduler: '$WIN_TASK' aktiv (watch $interval, bei Logon)"
       ;;
   esac
+
+  # Melden, was danach GILT — nicht, was getan wurde. Ein eingerichteter
+  # Dienst, der nicht läuft, sieht in der Flottenübersicht aus wie gar keiner.
+  echo "── Eingerichtet, jetzt geprüft ──"
+  svc_status
 }
 
 svc_status() {
   local os; os=$(os_name)
   case "$os" in
     linux)
-      if systemctl is-active $SVC_NAME >/dev/null 2>&1; then
-        echo "✅ $SVC_NAME: active ($(systemctl show $SVC_NAME -p ExecStart --value 2>/dev/null | sed 's/.*watch/watch/'))"
+      if systemctl is-active "$SVC_NAME.timer" >/dev/null 2>&1; then
+        local nxt
+        nxt=$(systemctl show "$SVC_NAME.timer" -p NextElapseUSecRealtime --value 2>/dev/null || true)
+        echo "✅ $SVC_NAME.timer: aktiv${nxt:+ — nächster Lauf: $nxt}"
+      elif systemctl is-active "$SVC_LEGACY" >/dev/null 2>&1; then
+        echo "⚠️  Noch der alte Dauerdienst $SVC_LEGACY — 'agent-mesh service install' löst ihn ab"
       else
-        echo "❌ $SVC_NAME: inactive — 'agent-mesh service install' ausführen"
+        echo "❌ $SVC_NAME.timer: inaktiv — 'agent-mesh service install' ausführen"
       fi
       ;;
     macos)
       if launchctl list 2>/dev/null | grep "$SVC_LABEL" >/dev/null; then
-        echo "✅ $SVC_LABEL: aktiv"
+        local iv
+        # `|| true` ist hier nicht kosmetisch: findet grep kein StartInterval —
+        # also genau im abzulösenden Altfall —, würde `set -e` die Statusausgabe
+        # beenden, bevor die Warnung erscheint. Genau so gefunden.
+        iv=$(grep -A1 StartInterval "$HOME/Library/LaunchAgents/$SVC_LABEL.plist" 2>/dev/null \
+             | grep -oE '[0-9]+' | head -1 || true)
+        if [ -n "$iv" ]; then
+          echo "✅ $SVC_LABEL: geladen — Abgleich alle ${iv}s"
+        else
+          echo "⚠️  $SVC_LABEL: geladen, aber noch als Dauerprozess (stirbt bei Abmeldung/Ruhezustand)"
+          echo "   Ablösen: agent-mesh service install"
+        fi
       else
         echo "❌ $SVC_LABEL: nicht geladen — 'agent-mesh service install' ausführen"
       fi
       ;;
     windows)
       if schtasks //Query //TN "$WIN_TASK" >/dev/null 2>&1; then
-        local state
-        state=$(schtasks //Query //TN "$WIN_TASK" //FO LIST 2>/dev/null | grep -i "Status" | head -1 | cut -d: -f2- | xargs)
-        echo "✅ '$WIN_TASK': $state"
+        local out state sched
+        out=$(schtasks //Query //TN "$WIN_TASK" //FO LIST //V 2>/dev/null || true)
+        state=$(printf '%s\n' "$out" | grep -i "^Status" | head -1 | cut -d: -f2- | xargs || true)
+        sched=$(printf '%s\n' "$out" | grep -iE "^Schedule Type|^Zeitplantyp" | head -1 | cut -d: -f2- | xargs || true)
+        echo "✅ '$WIN_TASK': ${state:-?}${sched:+ ($sched)}"
+        case "$(printf '%s' "$sched" | tr '[:upper:]' '[:lower:]')" in
+          *logon*|*anmeld*)
+            echo "⚠️  Läuft nur bei der Anmeldung — stirbt der Lauf, kommt bis zur nächsten"
+            echo "   Anmeldung nichts mehr. Ablösen: agent-mesh service install" ;;
+        esac
       else
         echo "❌ '$WIN_TASK': nicht eingerichtet — 'agent-mesh service install' ausführen"
       fi
@@ -161,23 +243,22 @@ svc_logs() {
   local n="${1:-30}"
   local os; os=$(os_name)
   case "$os" in
-    linux) journalctl -u $SVC_NAME --no-pager -n "$n" 2>&1 || echo "Keine Logs" ;;
-    macos) tail -n "$n" "$AGENT_MESH_HOME/watch.log" 2>/dev/null || echo "Keine Logs ($AGENT_MESH_HOME/watch.log)" ;;
-    windows) tail -n "$n" "$AGENT_MESH_HOME/watch.log" 2>/dev/null || echo "Keine Logs — Task schreibt nach $AGENT_MESH_HOME/watch.log" ;;
+    linux) journalctl -u "$SVC_NAME.service" --no-pager -n "$n" 2>&1 || echo "Keine Logs" ;;
+    *)     tail -n "$n" "$AGENT_MESH_HOME/watch.log" 2>/dev/null || echo "Keine Logs ($AGENT_MESH_HOME/watch.log)" ;;
   esac
 }
 
 svc_restart() {
   local os; os=$(os_name)
   case "$os" in
-    linux) systemctl restart $SVC_NAME && echo "✅ $SVC_NAME neu gestartet" ;;
+    linux) systemctl restart "$SVC_NAME.timer" && echo "✅ $SVC_NAME.timer neu gestartet" ;;
     macos)
       launchctl unload "$HOME/Library/LaunchAgents/$SVC_LABEL.plist" 2>/dev/null || true
-      launchctl load "$HOME/Library/LaunchAgents/$SVC_LABEL.plist" 2>/dev/null && echo "✅ $SVC_LABEL neu gestartet"
+      launchctl load "$HOME/Library/LaunchAgents/$SVC_LABEL.plist" 2>/dev/null && echo "✅ $SVC_LABEL neu geladen"
       ;;
     windows)
       schtasks //End //TN "$WIN_TASK" >/dev/null 2>&1 || true
-      schtasks //Run //TN "$WIN_TASK" >/dev/null 2>&1 && echo "✅ '$WIN_TASK' neu gestartet"
+      schtasks //Run //TN "$WIN_TASK" >/dev/null 2>&1 && echo "✅ '$WIN_TASK' angestossen"
       ;;
   esac
 }
@@ -186,9 +267,10 @@ svc_uninstall() {
   local os; os=$(os_name)
   case "$os" in
     linux)
-      systemctl stop $SVC_NAME 2>/dev/null || true
-      systemctl disable $SVC_NAME 2>/dev/null || true
-      rm -f "/etc/systemd/system/$SVC_NAME.service"
+      systemctl stop "$SVC_NAME.timer" 2>/dev/null || true
+      systemctl disable "$SVC_NAME.timer" 2>/dev/null || true
+      rm -f "/etc/systemd/system/$SVC_NAME.timer" "/etc/systemd/system/$SVC_NAME.service"
+      retire_legacy_unit
       systemctl daemon-reload
       echo "✅ $SVC_NAME entfernt"
       ;;
