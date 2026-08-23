@@ -116,6 +116,28 @@ if [ -n "$hits" ]; then
 else note "✅ kein \`| grep -q\` unter pipefail"; fi
 
 echo ""
+echo "── Erzeugte Dateien ──"
+# README.md und site/index.html werden aus docs/INSTALL.md + docs/COMMANDS.md
+# gebaut. Vergisst jemand den Lauf, schiebt die Action einen Commit nach —
+# und ein Release-Tag, das direkt davor gesetzt wurde, zeigt danach auf einen
+# Commit, der nicht mehr auf main liegt. Genau das ist zweimal passiert.
+if command -v python3 >/dev/null 2>&1 && [ -f generate.py ]; then
+  before=$(git status --porcelain README.md site/index.html 2>/dev/null)
+  if [ -n "$before" ]; then
+    note "README.md/site sind schon vor dem Lauf verändert — Prüfung übersprungen."
+  else
+    python3 generate.py >/dev/null 2>&1 || true
+    after=$(git status --porcelain README.md site/index.html 2>/dev/null)
+    if [ -n "$after" ]; then
+      bad "README.md/site/index.html sind nicht aktuell — 'python3 generate.py' laufen lassen und mitcommitten."
+      git checkout -- README.md site/index.html 2>/dev/null || true
+    else
+      note "✅ README und Webseite stimmen mit docs/ überein"
+    fi
+  fi
+fi
+
+echo ""
 echo "── Release-Hygiene ──"
 if [ -f VERSION ] && [ -f MIGRATIONS.md ]; then
   v=$(cat VERSION)

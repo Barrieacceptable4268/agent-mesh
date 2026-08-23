@@ -34,8 +34,14 @@ beitritt statt eines neuen, leeren:
 - **Version bumpen** heisst: `VERSION` *und* `AGENT_MESH_VERSION` in
   `agent-mesh-cli.sh` *und* `version:` in `distribution.yaml`. Ein Test hält
   die ersten beiden zusammen.
+- **`docs/INSTALL.md` oder `docs/COMMANDS.md` angefasst?** Dann `python3
+  generate.py` laufen lassen und README.md + site/index.html MITCOMMITTEN.
+  Sonst schiebt die Action einen Commit nach — und ein Release-Tag, das du
+  direkt davor gesetzt hast, zeigt danach auf einen Commit, der nicht mehr auf
+  main liegt. Zweimal passiert; das Gate prüft es jetzt.
 - **Release** ist ein signiertes Tag, kein GitHub-Release. Siehe
   `docs/RELEASING.md`. Ein unsigniertes Tag erreicht keine einzige Maschine.
+  Reihenfolge: erst alles committen, dann taggen, dann `git push --follow-tags`.
 
 ## Die Haltung, an der hier alles hängt
 
