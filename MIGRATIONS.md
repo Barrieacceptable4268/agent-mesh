@@ -6,6 +6,42 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.35.0
+
+**The client stops being part of the problem.** Nothing to do by hand.
+
+A Mac mini reported `HTTP 429 — rate-limited` while updating. What agent-mesh
+did in that situation fit on one line:
+
+    git fetch origin main --quiet 2>/dev/null
+
+The error went to `/dev/null`, the result was read as "nothing changed", and
+sixty seconds later it tried again. Six agents hammering a rate-limited
+endpoint every minute keep it rate-limited — and from the outside the machine
+just looked silent. It had in fact been running the whole time, for thirty-five
+hours, unable to publish anything and therefore unable to say so.
+
+One mechanism now covers three cases, because all three answer the same
+question — when is the next fetch worth making?
+
+    something changed   → straight back to the base interval. There is activity.
+    nothing changed     → slow down, up to 5 minutes. A quiet mesh does not need
+                          asking every minute.
+    refused             → slow down sharply, doubling up to 30 minutes. This is
+                          the difference between a polite client and a nuisance.
+
+Any success releases the brake. Idle backoff is deliberately capped far below
+the failure cap: a quiet mesh must not be treated like a hostile one.
+
+**And the agent now records why it is silent.** `git`'s error is read rather
+than discarded, translated into something a person can act on — throttling,
+no network, access refused, timeout — and kept in `.last-error` until the next
+success. `report`, `doctor` and `fleet` all show it, so "running but blocked"
+stops looking exactly like "switched off".
+
+Tuning, should you ever need it: `AGENT_MESH_FETCH_MIN` (60),
+`AGENT_MESH_FETCH_IDLE_CAP` (300), `AGENT_MESH_FETCH_FAIL_CAP` (1800).
+
 ## v1.34.0
 
 **Heartbeat and knowledge no longer share a channel.** Nothing to do by hand.

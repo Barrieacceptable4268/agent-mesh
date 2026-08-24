@@ -327,6 +327,95 @@ if t "install: jedes Framework-Modul steht in install.sh"; then
   [ -z "$missing" ] && ok || no "würde neu installierten Agents fehlen:$missing"
 fi
 
+# ════════════════ Höflichkeit gegenüber GitHub ════════════════
+# Am 2026-08-24 meldete der macmini HTTP 429. Was agent-mesh dann tat, stand in
+# einer Zeile: Fehler nach /dev/null, Ergebnis als "nichts geändert" gedeutet,
+# in 60 Sekunden nochmal. Sechs Agenten im Minutentakt gegen ein Rate-Limit
+# halten das Limit am Leben — der Client war Teil des Problems, und nach aussen
+# sah es aus wie Schweigen.
+echo ""
+echo "Höflichkeit gegenüber GitHub"
+
+# shellcheck disable=SC1090
+AGENT_MESH_HOME="$SANDBOX/backoff"; mkdir -p "$AGENT_MESH_HOME"
+source "$ROOT/agent-mesh-watch.sh" 2>/dev/null || true
+set +e
+
+iv() { _fetch_state | awk '{print $2}'; }
+
+if t "bremse: eine Ablehnung verdoppelt den Abstand"; then
+  rm -f "$AGENT_MESH_HOME/.fetch-state"
+  _fetch_record failed
+  assert_eq "$(iv)" "120"
+fi
+
+if t "bremse: wiederholte Ablehnung laeuft in eine Obergrenze"; then
+  rm -f "$AGENT_MESH_HOME/.fetch-state"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do _fetch_record failed; done
+  assert_eq "$(iv)" "$FETCH_FAIL_CAP"
+fi
+
+if t "bremse: ein Erfolg mit Aenderung loest sie sofort"; then
+  rm -f "$AGENT_MESH_HOME/.fetch-state"
+  for _ in 1 2 3 4 5; do _fetch_record failed; done
+  _fetch_record changed
+  assert_eq "$(iv)" "$FETCH_MIN"
+fi
+
+if t "bremse: Ruhe wird langsamer, aber nicht so langsam wie ein Fehler"; then
+  # Ein ruhiger Verbund darf nicht so behandelt werden wie ein abweisender.
+  rm -f "$AGENT_MESH_HOME/.fetch-state"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do _fetch_record idle; done
+  quiet=$(iv)
+  if [ "$quiet" = "$FETCH_IDLE_CAP" ] && [ "$FETCH_IDLE_CAP" -lt "$FETCH_FAIL_CAP" ]; then ok
+  else no "Ruhe-Obergrenze $quiet passt nicht (erwartet $FETCH_IDLE_CAP < $FETCH_FAIL_CAP)"; fi
+fi
+
+if t "bremse: solange sie haelt, wird nicht geholt"; then
+  rm -f "$AGENT_MESH_HOME/.fetch-state"
+  _fetch_record failed
+  _fetch_due && no "es wurde trotz Bremse geholt" || ok
+fi
+
+if t "bremse: ohne Zustand ist sofort faellig"; then
+  rm -f "$AGENT_MESH_HOME/.fetch-state"
+  _fetch_due && ok || no "ein frischer Agent muesste sofort holen duerfen"
+fi
+
+if t "diagnose: das 429 des macmini wird als Drosselung erkannt"; then
+  # Wortlaut aus der echten Meldung vom 2026-08-24.
+  out=$(_diagnose_git "remote: This request was rate-limited due to too many requests. Reduce the frequency of your requests or try again later.")
+  assert_contains "$out" "429"
+fi
+
+if t "diagnose: unterscheidet Netz, Zugang und Drosselung"; then
+  a=$(_diagnose_git "fatal: Could not resolve host: github.com")
+  b=$(_diagnose_git "fatal: Authentication failed")
+  c=$(_diagnose_git "The requested URL returned error: 429")
+  if [ "$a" != "$b" ] && [ "$b" != "$c" ] && [ "$a" != "$c" ]; then ok
+  else no "verschiedene Ursachen ergeben dieselbe Auskunft"; fi
+fi
+
+if t "diagnose: ein unbekannter Fehler wird durchgereicht, nicht verschluckt"; then
+  out=$(_diagnose_git "fatal: etwas ganz Neues")
+  assert_contains "$out" "etwas ganz Neues"
+fi
+
+if t "gedaechtnis-fehler: converge merkt sich, warum es nicht ging"; then
+  body=$(sed -n '/^cmd_converge() {/,/^}/p' "$ROOT/agent-mesh-watch.sh")
+  if printf '%s\n' "$body" | grep '_note_failure' >/dev/null \
+     && printf '%s\n' "$body" | grep '_clear_failure' >/dev/null; then ok
+  else no "der Grund wird nicht festgehalten oder nach Erfolg nicht geloescht"; fi
+fi
+
+if t "gedaechtnis-fehler: der Fehler steht im Bericht"; then
+  body=$(sed -n '/^report_facts() {/,/^}/p' "$ROOT/agent-mesh-doctor.sh")
+  printf '%s\n' "$body" | grep 'last-error' >/dev/null && ok \
+    || no "report_facts liest den letzten Fehler nicht"
+fi
+
+AGENT_MESH_HOME="$SANDBOX/home"
+
 # ════════════════ Telemetrie getrennt vom Wissen ════════════════
 # Gemessen am 2026-08-24: 11.478 von 12.159 Dateiänderungen im privaten Repo
 # waren report.json — 94,4 %. Ein Commit auf main hiess damit fast nie "es gibt

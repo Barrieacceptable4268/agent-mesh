@@ -237,6 +237,16 @@ security_checks() {
     note "Einrichten (ein Intervall, kein Prozess, der sterben kann):"
     note "  agent-mesh service install && agent-mesh service status"
   fi
+  # Läuft er, kommt aber nicht durch? Von aussen sieht beides gleich aus —
+  # der macmini lief am 2026-08-24 und wurde von GitHub abgewiesen, und die
+  # Flotte hat ihn 35 Stunden lang als ausgeschaltet geführt.
+  local le="${AGENT_MESH_HOME:-$HOME/.agent-mesh}/.last-error"
+  if [ -f "$le" ]; then
+    bad "Letzter Abgleich gescheitert: $(cut -f2- "$le" 2>/dev/null | head -1)"
+    note "seit $(cut -f1 "$le" 2>/dev/null | head -1)"
+    note "Der Agent läuft, kommt aber nicht durch — für die Flotte sieht das"
+    note "aus wie Schweigen. Die Abrufe werden bereits gedrosselt."
+  fi
 
   echo ""
   if [ "$fail" -eq 0 ]; then
@@ -271,7 +281,7 @@ report_facts() {
   R_OS=$(uname -sr 2>/dev/null || echo "?")
   R_AGENT=""; R_VERSION=""; R_COMMIT=""; R_REMOTE=""; R_INSTALLS=""
   R_ONPATH=""; R_TRUST=""; R_RELEASE=""; R_KEYS=""; R_TOKEN="nein"
-  R_WATCHER="nein"; R_OK=0; R_BAD=0; R_ISSUES=""; R_COMPONENTS=""
+  R_WATCHER="nein"; R_OK=0; R_BAD=0; R_ISSUES=""; R_COMPONENTS=""; R_LASTERR=""
 
   [ -f "$conf" ] && R_AGENT=$(grep "^AGENT_NAME=" "$conf" 2>/dev/null | cut -d= -f2- | head -1)
 
@@ -327,6 +337,9 @@ report_facts() {
   # Kurzem konvergiert" — der Dienst ist seit v1.31.0 ein Intervall.
   R_WATCHER=$(converge_liveness "$home")
   R_COMPONENTS=$(running_components)
+  # Warum war der letzte Abgleich nicht möglich? Steht nur da, wenn er es
+  # nicht war — converge räumt die Datei bei jedem Erfolg weg.
+  [ -f "$home/.last-error" ] && R_LASTERR=$(cut -f2- "$home/.last-error" 2>/dev/null | head -1)
 
   if [ -f "$conf" ]; then
     local out
@@ -568,7 +581,10 @@ for r in rows:
     bad = r.get("bad", 0)
     sec = "ok" if bad == 0 else f"{bad} offen"
     if bad or trust == "NEIN" or keys == "FEHLT" or vmark: unhealthy += 1
-    first = (r.get("issues") or [""])[0][:34]
+    # Ein bekannter Fehlergrund ist wichtiger als der erste Sicherheitsbefund:
+    # er erklärt, warum dieser Agent hinterherhinkt.
+    first = (r.get("last_error") or "") or (r.get("issues") or [""])[0]
+    first = first[:34]
     print(f"{a:<24} {v+vmark:<9} {fmt_age(h)+(' STILL' if old else ''):<11} "
           f"{trust:<6} {keys:<6} {rel:<10} {sec:<7} {first}")
 
@@ -636,11 +652,13 @@ cmd_report() {
   if [ "${1:-}" = "--json" ]; then
     "$PYTHON_BIN" - "$R_TS" "$R_HOST" "$R_OS" "$R_AGENT" "$R_VERSION" "$R_COMMIT" \
       "$R_REMOTE" "$R_INSTALLS" "$R_ONPATH" "$R_TRUST" "$R_RELEASE" "$R_KEYS" \
-      "$R_TOKEN" "$R_WATCHER" "$R_OK" "$R_BAD" "$R_ISSUES" "$R_COMPONENTS" << 'PYJSON'
+      "$R_TOKEN" "$R_WATCHER" "$R_OK" "$R_BAD" "$R_ISSUES" "$R_COMPONENTS" \
+      "$R_LASTERR" << 'PYJSON'
 import json, sys
 k = ["ts","host","os","agent","version","commit","remote","installs","onpath",
-     "trust","release","keys","relay_token","watcher","ok","bad","issues","components"]
-v = sys.argv[1:19]
+     "trust","release","keys","relay_token","watcher","ok","bad","issues","components",
+     "last_error"]
+v = sys.argv[1:20]
 d = dict(zip(k, v))
 d["ok"] = int(d["ok"] or 0); d["bad"] = int(d["bad"] or 0)
 d["installs"] = [x for x in d["installs"].split() if x]
@@ -674,6 +692,7 @@ PYJSON
   printf '%-14s %s\n' "trust" "${R_TRUST:-FEHLT — agent-mesh trust}"
   printf '%-14s %s\n' "release" "$R_RELEASE"
   printf '%-14s %s\n' "läuft hier" "${R_COMPONENTS:-nur die Konvergenz}"
+  [ -n "$R_LASTERR" ] && printf '%-14s %s  ⚠️\n' "letzter Fehler" "$R_LASTERR"
   [ -n "$R_KEYS" ] && printf '%-14s %s\n' "keys" "$R_KEYS"
   [ "$R_TOKEN" = "ja" ] && printf '%-14s %s\n' "relay-token" "NOCH IN DER CONF  ⚠️"
   printf '%-14s %s\n' "watcher" "$R_WATCHER"

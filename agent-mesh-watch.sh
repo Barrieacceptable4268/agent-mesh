@@ -106,6 +106,89 @@ _running_version() {
   fi
 }
 
+# ── Wann darf wieder geholt werden? ───────────────────────────────────────
+#
+# Am 2026-08-24 meldete der macmini beim Aktualisieren HTTP 429: GitHub hatte
+# genug. Was agent-mesh in dem Fall tat, stand in einer Zeile:
+#
+#     git fetch origin main --quiet 2>/dev/null
+#
+# Der Fehler ging nach /dev/null, das Ergebnis wurde als "nichts geändert"
+# gedeutet, und sechzig Sekunden später wurde es wieder versucht. Sechs Agenten
+# im Minutentakt gegen ein Rate-Limit halten das Limit am Leben — der Client
+# war Teil des Problems, und nach aussen sah es aus wie Schweigen.
+#
+# EIN Mechanismus deckt drei Fälle ab, weil alle drei dieselbe Frage stellen:
+# wann lohnt der nächste Abruf?
+#
+#   etwas geändert   → sofort wieder (Grundintervall). Es ist etwas los.
+#   nichts geändert  → langsamer werden, bis zur Ruhe-Obergrenze. Wer nichts
+#                      zu sagen hat, muss nicht jede Minute gefragt werden.
+#   abgelehnt        → deutlich langsamer werden (exponentiell), bis zur
+#                      Fehler-Obergrenze. Das ist der Unterschied zwischen
+#                      einem höflichen und einem lästigen Client.
+#
+# Jeder Erfolg setzt die Bremse zurück.
+FETCH_MIN="${AGENT_MESH_FETCH_MIN:-60}"          # Grundintervall
+FETCH_IDLE_CAP="${AGENT_MESH_FETCH_IDLE_CAP:-300}"   # Ruhe: höchstens 5 Min
+FETCH_FAIL_CAP="${AGENT_MESH_FETCH_FAIL_CAP:-1800}"  # Fehler: höchstens 30 Min
+
+_fetch_state_file() { echo "$AGENT_MESH_HOME/.fetch-state"; }
+
+# Gibt "naechster_zeitpunkt intervall" aus; fehlt die Datei, ist jetzt fällig.
+_fetch_state() {
+  local f; f=$(_fetch_state_file)
+  if [ -s "$f" ]; then cat "$f"; else echo "0 $FETCH_MIN"; fi
+}
+
+_fetch_due() {
+  local now next; now=$(date -u +%s)
+  next=$(_fetch_state | awk '{print $1}')
+  case "$next" in ''|*[!0-9]*) return 0 ;; esac
+  [ "$now" -ge "$next" ]
+}
+
+# _fetch_record <changed|idle|failed>
+_fetch_record() {
+  local outcome="$1" now iv
+  now=$(date -u +%s)
+  iv=$(_fetch_state | awk '{print $2}')
+  case "$iv" in ''|*[!0-9]*) iv="$FETCH_MIN" ;; esac
+  case "$outcome" in
+    changed) iv="$FETCH_MIN" ;;
+    idle)    iv=$(( iv * 2 )); [ "$iv" -gt "$FETCH_IDLE_CAP" ] && iv="$FETCH_IDLE_CAP" ;;
+    failed)  iv=$(( iv * 2 )); [ "$iv" -gt "$FETCH_FAIL_CAP" ] && iv="$FETCH_FAIL_CAP" ;;
+  esac
+  [ "$iv" -lt "$FETCH_MIN" ] && iv="$FETCH_MIN"
+  printf '%s %s\n' "$(( now + iv ))" "$iv" > "$(_fetch_state_file)" 2>/dev/null || true
+}
+
+# Warum ist dieser Agent gerade still? Wer es nicht aufschreibt, kann es
+# hinterher niemandem sagen — und genau das war der Zustand des macmini:
+# lief, konnte nicht veröffentlichen, sah von aussen aus wie ausgeschaltet.
+_note_failure() {   # _note_failure <text>
+  local f="$AGENT_MESH_HOME/.last-error"
+  printf '%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$1" > "$f" 2>/dev/null || true
+}
+_clear_failure() { rm -f "$AGENT_MESH_HOME/.last-error" 2>/dev/null || true; }
+
+# Aus der Fehlerausgabe von git das herauslesen, womit ein Mensch etwas
+# anfangen kann. "429" allein schickt ihn suchen.
+_diagnose_git() {   # _diagnose_git <stderr-text>
+  case "$1" in
+    *429*|*"rate limit"*|*"rate-limited"*|*"Zu viele"*)
+      echo "GitHub drosselt (HTTP 429) — Abrufe werden vorerst seltener" ;;
+    *"Could not resolve host"*|*"Konnte den Host"*|*"Temporary failure in name resolution"*)
+      echo "Kein Netz (DNS)" ;;
+    *"Permission denied"*|*"Authentication failed"*|*"could not read Username"*)
+      echo "Zugang abgelehnt — agent-mesh connect" ;;
+    *"timed out"*|*"Timeout"*)
+      echo "Zeitüberschreitung zu GitHub" ;;
+    "") echo "git fetch gescheitert (ohne Meldung)" ;;
+    *)  echo "$(printf '%s' "$1" | tr '\n' ' ' | cut -c1-90)" ;;
+  esac
+}
+
 # ── Ein Durchlauf ──────────────────────────────────────────────────────────
 cmd_converge() {
   local quiet=0
@@ -157,18 +240,33 @@ cmd_converge() {
   # 2. Wartungssignale (Beschleuniger; Schritt 1 wirkt auch ohne sie)
   "$BIN" maintenance-run >> "$LOG" 2>&1 || failed=1
 
-  # 3. Repo-Änderungen übernehmen
-  if (cd "$MEMORIES_DIR" && git fetch origin main --quiet 2>/dev/null); then
-    local behind
-    behind=$(cd "$MEMORIES_DIR" && git rev-list --count HEAD..origin/main 2>/dev/null || echo 0)
-    if [ "${behind:-0}" -gt 0 ]; then
-      changed=1
-      echo "⬆️  $behind neue Commit(s) — synce…"
-      "$BIN" sync >> "$LOG" 2>&1 || { echo "⚠️  sync meldete Fehler — Log: $LOG"; failed=1; }
-      local inbox
-      inbox=$("$BIN" inbox 2>/dev/null | grep -c "──" || true)
-      [ "${inbox:-0}" -gt 0 ] && echo "📬 $inbox Nachricht(en) (agent-mesh inbox)"
-      "$BIN" respond >> "$LOG" 2>&1 || { echo "⚠️  Auto-Respond meldete Fehler — Log: $LOG"; failed=1; }
+  # 3. Repo-Änderungen übernehmen — aber nur, wenn es an der Zeit ist.
+  if _fetch_due; then
+    local ferr frc=0
+    ferr=$( (cd "$MEMORIES_DIR" && git fetch origin main --quiet 2>&1 >/dev/null) ) || frc=1
+    if [ "$frc" != "0" ]; then
+      local why; why=$(_diagnose_git "$ferr")
+      _fetch_record failed
+      _note_failure "$why"
+      echo "⚠️  Abgleich nicht möglich: $why"
+      echo "   Nächster Versuch frühestens in $(( $(_fetch_state | awk '{print $2}') / 60 )) Min."
+      failed=1
+    else
+      _clear_failure
+      local behind
+      behind=$(cd "$MEMORIES_DIR" && git rev-list --count HEAD..origin/main 2>/dev/null || echo 0)
+      if [ "${behind:-0}" -gt 0 ]; then
+        changed=1
+        _fetch_record changed
+        echo "⬆️  $behind neue Commit(s) — synce…"
+        "$BIN" sync >> "$LOG" 2>&1 || { echo "⚠️  sync meldete Fehler — Log: $LOG"; failed=1; }
+        local inbox
+        inbox=$("$BIN" inbox 2>/dev/null | grep -c "──" || true)
+        [ "${inbox:-0}" -gt 0 ] && echo "📬 $inbox Nachricht(en) (agent-mesh inbox)"
+        "$BIN" respond >> "$LOG" 2>&1 || { echo "⚠️  Auto-Respond meldete Fehler — Log: $LOG"; failed=1; }
+      else
+        _fetch_record idle
+      fi
     fi
   fi
 
