@@ -6,6 +6,19 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.36.1
+
+The component survey reported `converge-timer` on macOS whenever the LaunchAgent
+was loaded — without checking *which* definition was loaded. The label stayed
+the same on purpose, so that `launchctl load` replaces the old arrangement
+rather than adding a second one; that is exactly why "loaded" says nothing about
+what is loaded.
+
+A Mac mini consequently reported `converge-timer` and "no convergence for over
+15 minutes" in the same breath. One of the two was invented, by the very survey
+whose job is to tell them apart. It now reads `StartInterval` from the plist and
+says `watch-alt` where the resident arrangement is still in place.
+
 ## v1.36.0
 
 **A machine that is off on purpose is not a fault.**

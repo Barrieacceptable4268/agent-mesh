@@ -381,7 +381,19 @@ running_components() {
     systemctl is-enabled agent-mesh-watch >/dev/null 2>&1 && _rc_add watch-alt
   fi
   if command -v launchctl >/dev/null 2>&1; then
-    launchctl list 2>/dev/null | grep "dev.moinsen.agentmesh.watch" >/dev/null && _rc_add converge-timer
+    # Der Label ist derselbe geblieben, damit `launchctl load` die alte
+    # Definition ERSETZT. Genau deshalb sagt "geladen" nichts darüber, WAS
+    # geladen ist — erst StartInterval unterscheidet das Intervall vom alten
+    # Dauerprozess. Ohne diese Prüfung meldete der macmini gleichzeitig
+    # "converge-timer" und "seit 15 Minuten keine Konvergenz"; eines von
+    # beidem war erfunden.
+    if launchctl list 2>/dev/null | grep "dev.moinsen.agentmesh.watch" >/dev/null; then
+      if grep -q "StartInterval" "$HOME/Library/LaunchAgents/dev.moinsen.agentmesh.watch.plist" 2>/dev/null; then
+        _rc_add converge-timer
+      else
+        _rc_add watch-alt
+      fi
+    fi
   fi
 
   printf '%s' "${found# }"

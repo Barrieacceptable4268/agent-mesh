@@ -568,6 +568,21 @@ if t "komponenten: der Bericht nennt, was hier laeuft"; then
     && ok || no "report --json fuehrt kein components-Feld"
 fi
 
+if t "komponenten: geladen heisst nicht, dass es das Intervall ist"; then
+  # Der LaunchAgent-Label ist derselbe geblieben, damit die alte Definition
+  # ersetzt wird. "geladen" sagt deshalb nichts darueber, WAS geladen ist.
+  # Ohne diese Unterscheidung meldete der macmini gleichzeitig
+  # "converge-timer" und "seit 15 Minuten keine Konvergenz".
+  # Genau den launchctl-Block ansehen: `_rc_add watch-alt` steht auch an
+  # anderen Stellen, ein Grep ueber die ganze Funktion bliebe deshalb gruen.
+  # (Die erste Fassung dieses Tests tat genau das und fing die Mutation nicht.)
+  blk=$(sed -n '/command -v launchctl/,/^  fi$/p' "$ROOT/agent-mesh-doctor.sh")
+  if printf '%s\n' "$blk" | grep 'StartInterval' >/dev/null \
+     && printf '%s\n' "$blk" | grep '_rc_add watch-alt' >/dev/null \
+     && printf '%s\n' "$blk" | grep -c '_rc_add' | grep -x 2 >/dev/null; then ok
+  else no "die Erhebung nennt einen Zustand, den sie nicht festgestellt hat"; fi
+fi
+
 if t "komponenten: fleet haelt Schweigen und Abwesenheit auseinander"; then
   # "nirgends" darf nicht heissen "in keinem Bericht, der es sagen kann".
   # Ein Agent auf einer alten Fassung kennt das Feld nicht — seine Dienste
