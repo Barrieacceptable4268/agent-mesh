@@ -452,14 +452,49 @@ doctor_fix() {
 # zusammengeführt. Wichtig ist die Spalte "alt" — ein Bericht von vorgestern
 # beschreibt nicht den heutigen Zustand, und das muss man SEHEN, statt es zu
 # übersehen.
+# Berichte einsammeln — seit v1.34.0 von je einer eigenen Referenz pro Agent.
+#
+# Die Referenzen holen ist EIN Rundlauf und rührt main nicht an. Gelesen wird
+# ohne Auschecken, direkt aus dem Objekt.
+collect_reports() {   # collect_reports <zielverzeichnis>
+  local out="$1" ref agent
+  (cd "$MEMORIES_DIR" && git fetch --force --quiet origin \
+     "refs/heads/reports/*:refs/remotes/origin/reports/*" 2>/dev/null) || true
+
+  while IFS= read -r ref; do
+    [ -n "$ref" ] || continue
+    agent="${ref##*/}"
+    mkdir -p "$out/$agent"
+    (cd "$MEMORIES_DIR" && git show "$ref:report.json" 2>/dev/null) > "$out/$agent/report.json" 2>/dev/null || true
+    [ -s "$out/$agent/report.json" ] || rm -rf "$out/$agent"
+  done << REFS
+$(cd "$MEMORIES_DIR" && git for-each-ref --format='%(refname)' 'refs/remotes/origin/reports/*' 2>/dev/null)
+REFS
+
+  # Übergangsweise auch die alten Berichte auf main lesen. Ohne das wäre die
+  # Flotte während des Rollouts blind für jeden Agenten, der noch nicht
+  # nachgezogen hat — und ausgerechnet die sind die interessanten. Fällt weg,
+  # sobald alle auf v1.34.0 stehen.
+  local legacy
+  for legacy in "$MEMORIES_DIR"/agents/*/report.json; do
+    [ -f "$legacy" ] || continue
+    agent=$(basename "$(dirname "$legacy")")
+    [ -d "$out/$agent" ] && continue     # die eigene Referenz hat Vorrang
+    mkdir -p "$out/$agent"
+    cp "$legacy" "$out/$agent/report.json"
+  done
+}
+
 cmd_fleet() {
   load_conf
-  local dir="$MEMORIES_DIR/agents"
-  [ -d "$dir" ] || die "Kein agents/-Verzeichnis — zuerst: agent-mesh sync"
+  local dir; dir=$(mktemp -d)
+  # shellcheck disable=SC2064
+  trap "rm -rf '$dir'" RETURN
+  collect_reports "$dir"
   local n=0 f
   for f in "$dir"/*/report.json; do [ -f "$f" ] && n=$((n+1)); done
   if [ "$n" -eq 0 ]; then
-    info "Noch keine Berichte. Jeder Agent liefert einen mit 'agent-mesh sync' (ab v1.24.0)."
+    info "Noch keine Berichte. Jeder Agent veröffentlicht einen beim sync."
     return 0
   fi
   "$PYTHON_BIN" - "$dir" "$(git -C "$MEMORIES_DIR" show origin/main:VERSION 2>/dev/null || echo '')" << 'PYFLEET'
@@ -590,6 +625,13 @@ PYFLEET
 # beschrieben, die es nicht gab — nicht aus Nachlässigkeit, sondern weil die
 # Werkzeuge meldeten, was sie TATEN, nicht was dabei herauskam.
 cmd_report() {
+  # --publish: nur das Lebenszeichen auf die eigene Referenz schieben. Der
+  # billigste Weg, im Verbund sichtbar zu bleiben — ein Push, kein Abgleich.
+  if [ "${1:-}" = "--publish" ]; then
+    load_conf
+    publish_report --force
+    return $?
+  fi
   report_facts
   if [ "${1:-}" = "--json" ]; then
     "$PYTHON_BIN" - "$R_TS" "$R_HOST" "$R_OS" "$R_AGENT" "$R_VERSION" "$R_COMMIT" \

@@ -175,17 +175,24 @@ cmd_converge() {
   # 4. Relay-Warteschlange
   "$BIN" peer-recv >> "$LOG" 2>&1 || true
 
-  # Auch OHNE Änderung muss der Bericht frisch werden: ein alter Bericht ist
-  # in der Flottenübersicht nicht von einem toten Agent zu unterscheiden, und
-  # genau diese Unterscheidung ist das, was gestern gefehlt hat.
-  local rep="$MEMORIES_DIR/agents/${AGENT_NAME}/report.json"
-  if [ "$changed" = "0" ] && [ -f "$rep" ]; then
-    local rage=0 mt now
+  # Auch OHNE Änderung muss das Lebenszeichen frisch werden: ein alter Bericht
+  # ist in der Flottenübersicht nicht von einem toten Agenten zu unterscheiden.
+  #
+  # Dafür läuft seit v1.34.0 kein voller sync mehr, sondern nur die
+  # Veröffentlichung des Berichts auf die eigene Referenz — ein Push, der main
+  # nicht berührt und deshalb bei niemandem etwas auslöst. Vorher stiess ein
+  # stündlicher Herzschlag einen kompletten Abgleich an, inklusive Export,
+  # Import und Commit auf main.
+  local cache="$AGENT_MESH_HOME/.last-report.json"
+  if [ "$changed" = "0" ]; then
+    local rage=999999 mt now
     now=$(date -u +%s)
-    mt=$(stat -f %m "$rep" 2>/dev/null || stat -c %Y "$rep" 2>/dev/null || echo 0)
-    rage=$((now - mt))
-    if [ "$rage" -gt 3600 ]; then
-      "$BIN" sync >> "$LOG" 2>&1 || failed=1
+    if [ -f "$cache" ]; then
+      mt=$(stat -f %m "$cache" 2>/dev/null || stat -c %Y "$cache" 2>/dev/null || echo 0)
+      rage=$((now - mt))
+    fi
+    if [ "$rage" -gt "${AGENT_MESH_HEARTBEAT:-3600}" ]; then
+      "$BIN" report --publish >> "$LOG" 2>&1 || failed=1
     fi
   fi
 

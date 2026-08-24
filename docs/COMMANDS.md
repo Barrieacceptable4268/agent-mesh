@@ -26,7 +26,7 @@
 | `agent-mesh update [--check]` | Auto-update the framework — verifies the release signature and checks that the files actually landed |
 | `agent-mesh trust [--show]` | Adopt or review the release signing keys this agent trusts |
 | `agent-mesh doctor [--vault\|--net\|--security\|--fix]` | Preflight and security checks with repair hints |
-| `agent-mesh report [--json]` | One compact, copy-pasteable state report — version, installs, trust base, keys, open findings |
+| `agent-mesh report [--json\|--publish]` | One compact, copy-pasteable state report — version, installs, trust base, keys, open findings |
 | `agent-mesh maintenance [--dry-run]` | Tell every agent to bring itself up to date — a signal, not a remote command |
 | `agent-mesh respond` | Let the machine's own Hermes agent answer incoming questions — no context-free model speaking in its name |
 | `agent-mesh fleet` | Hub view: every agent's state, gathered from the reports they publish on sync |
@@ -73,3 +73,16 @@ chain exists to prevent. Memory still reaches the agent: injection puts it in
 the system prompt, and reading it needs no tool. Widening the set
 (`AGENT_MESH_HERMES_TOOLSETS=hermes-cli`) is a deliberate, per-machine choice —
 the same separation as `doctor --fix`.
+
+## Heartbeat is not knowledge
+
+94.4 % of every file change ever made to the private repository was a state
+report. A commit on `main` therefore almost never meant "there is something new
+to know" — and that is the signal every agent listens for.
+
+Since v1.34.0 each agent publishes to `refs/heads/reports/<agent>`: one
+parentless commit, force-pushed, replacing its predecessor. `main` carries
+knowledge and messages; the heartbeat carries itself. Two agents can never
+collide, the history of a heartbeat does not accumulate, and a report can no
+longer trigger anyone else's sync — not because a rule forbids it, but because
+it never touches `main`.

@@ -221,13 +221,17 @@ if t "bericht: ohne vorherigen Bericht ist alles eine Neuigkeit"; then
   report_is_news "$SANDBOX/a.json" "$SANDBOX/gibtsnicht.json" && ok || no "erster Bericht würde nie veröffentlicht"
 fi
 
-if t "bericht: sync fragt die Regel überhaupt"; then
+if t "bericht: die Veröffentlichung fragt die Regel überhaupt"; then
   # Eine Mutationsprobe hat gezeigt, dass alle Regel-Tests grün bleiben, wenn
-  # man den AUFRUF in cmd_sync entfernt. Eine Regel, die niemand fragt, ist
-  # keine Regel. Das hier ist eine Struktur-Zusicherung, keine Verhaltens-
-  # prüfung — sie fängt das Löschen der Aufrufstelle, nicht mehr.
-  grep -q 'if report_is_news "\$_rep" "\$agent_dir/report.json"; then' "$BIN" \
-    && ok || no "cmd_sync veröffentlicht den Bericht ohne die Kaskaden-Regel"
+  # man den AUFRUF entfernt. Eine Regel, die niemand fragt, ist keine Regel.
+  # Das hier ist eine Struktur-Zusicherung, keine Verhaltensprüfung — sie
+  # fängt das Löschen der Aufrufstelle, nicht mehr.
+  #
+  # Die Stelle ist seit v1.34.0 publish_report, nicht mehr cmd_sync. Der Test
+  # hat den Umzug selbst gemeldet, statt ihn durchgehen zu lassen.
+  body=$(sed -n '/^publish_report() {/,/^}/p' "$BIN")
+  printf '%s\n' "$body" | grep 'report_is_news "\$tmp" "\$cache"' >/dev/null \
+    && ok || no "publish_report pusht ohne zu prüfen, ob der Bericht etwas Neues sagt"
 fi
 
 # ════════════════ Antworten ════════════════
@@ -321,6 +325,65 @@ if t "install: jedes Framework-Modul steht in install.sh"; then
     grep -q "[ \\\\]$b\\b" "$ROOT/install.sh" || missing="$missing $b"
   done
   [ -z "$missing" ] && ok || no "würde neu installierten Agents fehlen:$missing"
+fi
+
+# ════════════════ Telemetrie getrennt vom Wissen ════════════════
+# Gemessen am 2026-08-24: 11.478 von 12.159 Dateiänderungen im privaten Repo
+# waren report.json — 94,4 %. Ein Commit auf main hiess damit fast nie "es gibt
+# etwas Neues zu wissen". Seit v1.34.0 hat jeder Agent eine eigene Referenz.
+echo ""
+echo "Telemetrie getrennt vom Wissen"
+
+if t "telemetrie: der Bericht geht auf eine eigene Referenz pro Agent"; then
+  body=$(sed -n '/^publish_report() {/,/^}/p' "$BIN")
+  if printf '%s\n' "$body" | grep 'REPORT_REF_PREFIX/\$AGENT_NAME' >/dev/null \
+     && printf '%s\n' "$body" | grep -- '--force' >/dev/null; then ok
+  else no "publish_report schreibt nicht force auf refs/heads/reports/<agent>"; fi
+fi
+
+if t "telemetrie: der Commit ist elternlos, die Historie waechst nie"; then
+  # git commit-tree OHNE -p. Mit Elternteil wuerde jede Stunde ein Commit an
+  # eine Kette gehaengt, und das Repo waechst wieder — nur an anderer Stelle.
+  body=$(sed -n '/^publish_report() {/,/^}/p' "$BIN")
+  if printf '%s\n' "$body" | grep 'git commit-tree "\$tree"' >/dev/null \
+     && ! printf '%s\n' "$body" | grep 'commit-tree.*-p ' >/dev/null; then ok
+  else no "der Bericht-Commit bekommt einen Elternteil"; fi
+fi
+
+if t "telemetrie: das git-Plumbing erzeugt wirklich einen Wurzel-Commit"; then
+  # Keine Struktur-Zusicherung, sondern der echte Ablauf in einem Wegwerf-Repo.
+  ( set -e
+    r="$SANDBOX/plumb"; mkdir -p "$r"; cd "$r"
+    git init -q . 2>/dev/null
+    git config user.email t@t; git config user.name t
+    printf '{"a":1}\n' > r.json
+    b=$(git hash-object -w r.json)
+    tr_=$(printf '100644 blob %s\treport.json\n' "$b" | git mktree)
+    c=$(git commit-tree "$tr_" -m probe)
+    [ -z "$(git log --format='%P' -1 "$c")" ]
+  ) && ok || no "der Ablauf erzeugt keinen elternlosen Commit"
+fi
+
+if t "telemetrie: sync legt keinen Bericht mehr auf main ab"; then
+  body=$(sed -n '/^cmd_sync() {/,/^}/p' "$BIN")
+  if printf '%s\n' "$body" | grep 'publish_report' >/dev/null \
+     && ! printf '%s\n' "$body" | grep 'mv -f "\$_rep" "\$agent_dir/report.json"' >/dev/null; then ok
+  else no "cmd_sync schreibt den Bericht wieder nach main"; fi
+fi
+
+if t "telemetrie: fleet liest waehrend des Rollouts BEIDE Quellen"; then
+  # Ohne die alte Quelle waere die Flotte blind fuer jeden Agenten, der noch
+  # nicht nachgezogen hat — und genau die sind die interessanten.
+  body=$(sed -n '/^collect_reports() {/,/^}/p' "$ROOT/agent-mesh-doctor.sh")
+  if printf '%s\n' "$body" | grep 'refs/remotes/origin/reports' >/dev/null \
+     && printf '%s\n' "$body" | grep 'agents/\*/report.json' >/dev/null; then ok
+  else no "fleet liest nur eine der beiden Quellen"; fi
+fi
+
+if t "telemetrie: der Herzschlag ist ein Push, kein voller Abgleich"; then
+  body=$(sed -n '/^cmd_converge() {/,/^}/p' "$ROOT/agent-mesh-watch.sh")
+  if printf '%s\n' "$body" | grep 'report --publish' >/dev/null; then ok
+  else no "converge stoesst zum Lebenszeichen wieder einen ganzen sync an"; fi
 fi
 
 # ════════════════ Was wo läuft ════════════════

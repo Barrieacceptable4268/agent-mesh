@@ -316,19 +316,15 @@ PYEOF
   # also committeten sie ihrerseits. Sechs Agents im Minutentakt haben sich so
   # gegenseitig dauerhaft in Bewegung gehalten, ohne dass je etwas passiert
   # wäre. Ein Herzschlag darf nicht der Grund für den nächsten sein.
-  local _rep; _rep=$(mktemp)
-  if cmd_report --json > "$_rep" 2>/dev/null \
-     && [ -s "$_rep" ] \
-     && "$PYTHON_BIN" -c "import json,sys; json.load(open(sys.argv[1]))" "$_rep" 2>/dev/null; then
-    if report_is_news "$_rep" "$agent_dir/report.json"; then
-      mv -f "$_rep" "$agent_dir/report.json"
-    else
-      rm -f "$_rep"
-    fi
-  else
-    warn "Zustandsbericht ungültig — nicht veröffentlicht (sync läuft weiter)"
-    warn "  Selbst ansehen: agent-mesh report --json | head -5"
-    rm -f "$_rep"
+  publish_report || true
+
+  # Einmalige Räumung: der eigene Bericht lag bis v1.33.0 auf main und
+  # verstopft dort die Historie. Nur der EIGENE — was andere Agenten dort
+  # liegen haben, räumen sie selbst weg, wenn sie nachziehen.
+  if [ -f "$agent_dir/report.json" ]; then
+    git rm -q --cached "$agent_dir/report.json" 2>/dev/null || true
+    rm -f "$agent_dir/report.json"
+    info "Bericht von main entfernt — er lebt jetzt unter reports/$AGENT_NAME"
   fi
 
   # Commit + Push
@@ -345,9 +341,82 @@ PYEOF
   cmd_status
 }
 
+# ── Berichte gehören nicht in die Historie des Wissens ────────────────────
+#
+# Gemessen am 2026-08-24: 11.478 von 12.159 Dateiänderungen im privaten Repo
+# waren report.json — 94,4 %. Ein Commit auf main hiess damit fast nie "es gibt
+# etwas Neues zu wissen", und genau darauf hört jeder Agent bei jedem Durchlauf.
+# Herzschlag und Wissen teilten sich einen Kanal, und der Herzschlag hat ihn
+# übertönt.
+#
+# Jeder Agent schreibt seinen Bericht jetzt auf eine EIGENE Referenz:
+#
+#     refs/heads/reports/<agent>      ein einziger elternloser Commit,
+#                                     force-gepusht, Historie wächst nie
+#
+# Drei Dinge folgen daraus, und das dritte ist das eigentliche:
+#   1. main ändert sich nur noch, wenn es wirklich etwas Neues gibt.
+#   2. Zwei Agenten kommen sich nie in die Quere — jeder schreibt nur seine
+#      eigene Referenz, also gibt es weder Rebase noch Wettlauf.
+#   3. Die Kaskade ist nicht mehr durch eine Regel verhindert, sondern durch
+#      die Konstruktion: ein Bericht kann keinen sync bei jemand anderem mehr
+#      auslösen, weil er main nicht berührt.
+#
+# Geschrieben wird ohne Arbeitsverzeichnis, direkt über git-Plumbing — einen
+# zweiten Branch auszuchecken wäre teuer und würde den laufenden sync stören.
+REPORT_REF_PREFIX="refs/heads/reports"
+
+publish_report() {   # publish_report [--force]
+  local force="${1:-}"
+  local tmp; tmp=$(mktemp)
+  if ! cmd_report --json > "$tmp" 2>/dev/null \
+     || [ ! -s "$tmp" ] \
+     || ! "$PYTHON_BIN" -c "import json,sys; json.load(open(sys.argv[1]))" "$tmp" 2>/dev/null; then
+    rm -f "$tmp"
+    warn "Zustandsbericht ungültig — nicht veröffentlicht."
+    warn "  Selbst ansehen: agent-mesh report --json | head -5"
+    return 1
+  fi
+
+  # Sagt der Bericht etwas Neues? Verglichen wird gegen die zuletzt
+  # VERÖFFENTLICHTE Fassung, die lokal liegt — dafür muss nichts geholt werden.
+  local cache="$AGENT_MESH_HOME/.last-report.json"
+  if [ "$force" != "--force" ] && ! report_is_news "$tmp" "$cache"; then
+    rm -f "$tmp"; return 0
+  fi
+
+  local blob tree commit rc=0
+  blob=$(cd "$MEMORIES_DIR" && git hash-object -w "$tmp" 2>/dev/null) || rc=1
+  if [ "$rc" = "0" ] && [ -n "$blob" ]; then
+    tree=$(cd "$MEMORIES_DIR" && printf '100644 blob %s\treport.json\n' "$blob" | git mktree 2>/dev/null) || rc=1
+  fi
+  if [ "$rc" = "0" ] && [ -n "${tree:-}" ]; then
+    # Kein -p: ein elternloser Commit. Die alte Fassung wird ersetzt, nicht
+    # fortgeschrieben — die Historie eines Herzschlags interessiert niemanden.
+    commit=$(cd "$MEMORIES_DIR" && git commit-tree "$tree" \
+             -m "report: $AGENT_NAME $(date -u +%Y-%m-%dT%H:%M:%SZ)" 2>/dev/null) || rc=1
+  fi
+  if [ "$rc" != "0" ] || [ -z "${commit:-}" ]; then
+    rm -f "$tmp"; warn "Bericht konnte nicht geschrieben werden (git-Plumbing)."; return 1
+  fi
+
+  if (cd "$MEMORIES_DIR" && git push --force --quiet origin \
+      "$commit:$REPORT_REF_PREFIX/$AGENT_NAME" 2>/dev/null); then
+    mv -f "$tmp" "$cache"
+    return 0
+  fi
+  rm -f "$tmp"
+  warn "Bericht nicht veröffentlicht (push fehlgeschlagen) — der Verbund sieht den alten Stand."
+  return 1
+}
+
 # Sagt der neue Bericht etwas, das der alte nicht schon sagt? Der Zeitstempel
 # zählt dabei NICHT als Aussage — sonst wäre jeder Bericht eine Neuigkeit und
 # die Flotte hielte sich selbst in Bewegung (siehe oben).
+#
+# Seit v1.34.0 verhindert das keine Kaskade mehr — die ist konstruktiv
+# ausgeschlossen, weil ein Bericht main nicht mehr berührt. Es spart nur noch
+# Anfragen: ein Bericht, der nichts Neues sagt, muss nicht gepusht werden.
 #
 # Ausnahme: nach AGENT_MESH_HEARTBEAT Sekunden (Default 1h) wird auch ein
 # unveränderter Bericht erneuert. Ohne dieses Lebenszeichen wäre "seit Stunden

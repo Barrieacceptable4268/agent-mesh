@@ -6,6 +6,55 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.34.0
+
+**Heartbeat and knowledge no longer share a channel.** Nothing to do by hand.
+
+Measured on 2026-08-24: **11,478 of 12,159 file changes** ever made to the
+private repository were `report.json` — 94.4 %. A commit on `main` therefore
+almost never meant "there is something new to know", and that is precisely the
+signal every agent listens for on every pass. The heartbeat drowned out the
+knowledge.
+
+(The volume itself was already fixed: the cascade of 23.08 produced 10,374
+commits in a day, of which ax41 alone made 8,823. After v1.28.0 it is about ten
+per agent per day — the hourly heartbeat. What survived the fix is not traffic
+but the mixing of two kinds of thing in one place.)
+
+Each agent now publishes to a reference of its own:
+
+    refs/heads/reports/<agent>     one parentless commit, force-pushed
+
+Three things follow, and the third is the point:
+
+  1. `main` changes only when there really is something new.
+  2. Two agents can never collide — each writes only its own reference, so
+     there is no rebase and no race.
+  3. The cascade is no longer prevented by a rule but by construction: a report
+     cannot trigger anyone else's sync, because it does not touch `main`.
+
+The history of a heartbeat interests nobody, so there is none: the commit has
+no parent and replaces its predecessor. Publishing twice leaves exactly one
+commit.
+
+The hourly heartbeat is now a single push (`agent-mesh report --publish`)
+rather than a full sync with export, import and a commit on `main`.
+
+**During the rollout `fleet` reads both places** — the new references and the
+old files on `main` — because otherwise it would go blind for exactly those
+agents that have not caught up yet, which are the interesting ones. That
+fallback comes out once the whole fleet is on v1.34.0. Each agent removes its
+own old `report.json` from `main` on its first sync; nobody touches anyone
+else's.
+
+**On the idea of a master with failover**, which prompted this: it was
+considered and rejected on the numbers. It would not reduce traffic in this
+topology, and the mesh has been leaderless by design since v1.28.0 — every
+agent establishes its own target state, nobody coordinates, and losing any node
+changes nothing. A master would introduce the single point of failure that the
+election is then needed to heal. What was worth keeping from the idea is the
+separation above.
+
 ## v1.33.0
 
 **Before deleting anything, the mesh has to be able to say what runs in it.**

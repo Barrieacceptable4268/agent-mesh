@@ -15,7 +15,7 @@
 # CI und die Doku bleiben also draussen; im Profil landet nur die
 # Hermes-Seite. Ohne diese Liste würde er alles kopieren.
 name: agent-mesh
-version: 1.33.0
+version: 1.34.0
 description: "Ein Agent, der Teil eines Wissensverbunds ist — geteiltes Gedächtnis, verschlüsseltes Vault, signierte Releases, Antworten aus Belegen statt aus Plausibilität"
 hermes_requires: ">=0.12.0"
 author: "moinsen.dev"

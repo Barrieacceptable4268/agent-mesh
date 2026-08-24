@@ -23,7 +23,7 @@
 # Datei im Klon sagt, welche Version geholt wurde, nicht welche installiert
 # ist. Genau diese Verwechslung hat die Flotte schon zweimal grün aussehen
 # lassen, während der alte Stand lief. Der CI-Check hält beide Werte gleich.
-AGENT_MESH_VERSION="1.33.0"
+AGENT_MESH_VERSION="1.34.0"
 
 # ── Die Registry ───────────────────────────────────────────────────────────
 # Ein Datensatz pro Kommando:  gruppe|name|argumente|kurztext
@@ -52,7 +52,7 @@ BETRIEB|service|<unterkommando>|watch als Systemdienst — install, status, rest
 BETRIEB|update|[--check]|Framework aktualisieren (nur signierte Releases)
 BETRIEB|trust|[--show]|Vertrauensbasis für Release-Signaturen einsehen/übernehmen
 FLOTTE|doctor|[--fix]|Installation, Schlüssel, Dienste prüfen
-FLOTTE|report|[--json]|Kompakter, nachprüfbarer Zustandsbericht dieser Maschine
+FLOTTE|report|[--json|--publish]|Kompakter, nachprüfbarer Zustandsbericht dieser Maschine
 FLOTTE|fleet||Hub-Sicht: der Zustand jedes Agents aus seinem eigenen Bericht
 FLOTTE|maintenance|[--dry-run]|Allen Agents sagen, dass sie sich aktualisieren sollen
 WERKSTATT|govern|<unterkommando>|Selbstverwaltung: Issues an Agents verteilen
@@ -240,6 +240,12 @@ D
 ;;
     report) cat << 'D'
   --json      maschinenlesbar (das Format, das 'fleet' einsammelt)
+  --publish   nur das Lebenszeichen auf die eigene Referenz schieben
+
+  Veröffentlicht wird nach refs/heads/reports/<agent> — ein elternloser
+  Commit, force-gepusht, ohne main zu berühren. Vorher lagen die Berichte auf
+  main und machten dort 94,4 % aller Änderungen aus; ein Commit hiess damit
+  fast nie "es gibt etwas Neues zu wissen".
 
   Nur nachprüfbare Beobachtungen, keine Prosa. Entstanden, weil beim ersten
   Flotten-Rollout vier Berichte Zustände beschrieben, die es nicht gab —
