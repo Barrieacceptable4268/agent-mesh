@@ -936,6 +936,8 @@ case "${1:-}" in
   doctor)  shift; cmd_doctor "$@" ;;
   report)  shift; cmd_report "$@" ;;
   fleet)   shift; cmd_fleet "$@" ;;
+  pause)   shift; cmd_pause "$@" ;;
+  resume)  shift; cmd_resume "$@" ;;
   maintenance) shift; cmd_maintenance "$@" ;;
   maintenance-run) shift; cmd_maintenance_run ;;
   respond) shift; cmd_respond "$@" ;;

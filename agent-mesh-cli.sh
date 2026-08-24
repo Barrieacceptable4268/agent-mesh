@@ -23,7 +23,7 @@
 # Datei im Klon sagt, welche Version geholt wurde, nicht welche installiert
 # ist. Genau diese Verwechslung hat die Flotte schon zweimal grün aussehen
 # lassen, während der alte Stand lief. Der CI-Check hält beide Werte gleich.
-AGENT_MESH_VERSION="1.35.0"
+AGENT_MESH_VERSION="1.36.0"
 
 # ── Die Registry ───────────────────────────────────────────────────────────
 # Ein Datensatz pro Kommando:  gruppe|name|argumente|kurztext
@@ -54,6 +54,8 @@ BETRIEB|trust|[--show]|Vertrauensbasis für Release-Signaturen einsehen/überneh
 FLOTTE|doctor|[--fix]|Installation, Schlüssel, Dienste prüfen
 FLOTTE|report|[--json|--publish]|Kompakter, nachprüfbarer Zustandsbericht dieser Maschine
 FLOTTE|fleet||Hub-Sicht: der Zustand jedes Agents aus seinem eigenen Bericht
+FLOTTE|pause|<agent> [grund]|Einen Agent als absichtlich abwesend führen, statt als Störung
+FLOTTE|resume|<agent>|Eine Pause aufheben
 FLOTTE|maintenance|[--dry-run]|Allen Agents sagen, dass sie sich aktualisieren sollen
 WERKSTATT|govern|<unterkommando>|Selbstverwaltung: Issues an Agents verteilen
 WERKSTATT|autofix|<unterkommando>|Selbstverbesserung: Issue beheben und PR öffnen
@@ -261,6 +263,24 @@ D
   Die Spalte BERICHT ist die wichtigste: ein alter Bericht heisst, dass dort
   nichts mehr läuft. Ein Agent, der seit Stunden schweigt, bekommt kein
   Wartungssignal, kein Update und keine Nachricht mit.
+D
+;;
+    pause|resume) cat << 'D'
+  agent-mesh pause <agent> [grund]     als absichtlich abwesend führen
+  agent-mesh resume <agent>            wieder als Teil des Verbunds erwarten
+
+  Eine ausgeschaltete Maschine ist keine Störung. Ohne diesen Vermerk führt die
+  Flottenübersicht sie dauerhaft als Ausfall und empfiehlt Reparaturen auf
+  einem Rechner, den niemand einschalten kann — und ein Alarm, der drei Tage
+  lang falsch steht, wird am vierten auch dann ignoriert, wenn er stimmt.
+
+  Der Vermerk liegt im geteilten Repo, nicht auf der betroffenen Maschine —
+  die ist ja gerade aus. Ein pausierter Agent zählt weder als rückständig noch
+  als ohne Lebenszeichen.
+
+  Verbergen kann er nichts: meldet sich ein pausierter Agent doch, sagt die
+  Übersicht genau das und verlangt, die Pause aufzuheben. Eine vergessene
+  Pause darf keinen echten Ausfall zudecken.
 D
 ;;
     maintenance) cat << 'D'

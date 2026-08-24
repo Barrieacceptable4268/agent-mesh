@@ -29,6 +29,8 @@
 | `agent-mesh report [--json\|--publish]` | One compact, copy-pasteable state report — version, installs, trust base, keys, open findings |
 | `agent-mesh maintenance [--dry-run]` | Tell every agent to bring itself up to date — a signal, not a remote command |
 | `agent-mesh respond` | Let the machine's own Hermes agent answer incoming questions — no context-free model speaking in its name |
+| `agent-mesh pause <agent> [reason]` | Record an agent as deliberately away, so it stops being reported as a fault |
+| `agent-mesh resume <agent>` | Expect it back in the mesh |
 | `agent-mesh fleet` | Hub view: every agent's state, gathered from the reports they publish on sync |
 | `agent-mesh vault pins` | Show pinned recipient keys and any drift |
 | `agent-mesh vault repin <agent>` | Accept a genuine key change after out-of-band verification |

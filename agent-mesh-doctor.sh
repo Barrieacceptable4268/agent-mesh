@@ -465,6 +465,63 @@ doctor_fix() {
 # zusammengeführt. Wichtig ist die Spalte "alt" — ein Bericht von vorgestern
 # beschreibt nicht den heutigen Zustand, und das muss man SEHEN, statt es zu
 # übersehen.
+# ── Ein Agent, der absichtlich weg ist ────────────────────────────────────
+#
+# Die nucbox ist ausgeschaltet, weil eine SSD fehlt. Die Flottenübersicht führt
+# sie trotzdem als Störung und empfiehlt, dort einen Dienst einzurichten — auf
+# einer Maschine, die niemand einschalten kann. Ein Alarm, der dauerhaft falsch
+# steht, entwertet jeden anderen: wer die rote Zeile drei Tage lang ignoriert
+# hat, ignoriert auch die vierte, die stimmt.
+#
+# Die Pause steht im geteilten Repo, nicht lokal — die betroffene Maschine ist
+# ja gerade aus. Und sie kann nichts verbergen: meldet sich ein pausierter
+# Agent doch, sagt die Übersicht das und verlangt, die Pause aufzuheben. Eine
+# vergessene Pause darf keinen echten Ausfall zudecken.
+pause_dir() { echo "$MEMORIES_DIR/pauses"; }
+
+cmd_pause() {
+  load_conf
+  local who="${1:-}"; shift 2>/dev/null || true
+  local why="$*"
+  [ -n "$who" ] || die "agent-mesh pause <agent> [grund]"
+  [ -d "$MEMORIES_DIR/agents/$who" ] || warn "'$who' ist im Verbund nicht bekannt — Pause wird trotzdem vermerkt."
+  # Erst holen, dann schreiben, dann mit push_retry veröffentlichen. Die erste
+  # Fassung pushte blank — und scheiterte prompt, weil ein anderer Agent main
+  # in der Zwischenzeit bewegt hatte. Für genau das gibt es push_retry seit
+  # v1.9; es nicht zu benutzen war der Fehler, nicht die Nebenläufigkeit.
+  ( cd "$MEMORIES_DIR" && git pull --rebase -q origin main >/dev/null 2>&1 ) || true
+  mkdir -p "$(pause_dir)"
+  "$PYTHON_BIN" - "$(pause_dir)/$who.json" "$who" "${why:-ohne Angabe}" "$AGENT_NAME" << 'PYPAUSE'
+import json, sys, time
+path, who, why, by = sys.argv[1:5]
+json.dump({"agent": who, "reason": why, "by": by,
+           "since": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())},
+          open(path, "w"), indent=2, ensure_ascii=False)
+PYPAUSE
+  ( cd "$MEMORIES_DIR" \
+    && git add -A "pauses" >/dev/null 2>&1 \
+    && git commit -q -m "pause: $who — ${why:-ohne Angabe}" >/dev/null 2>&1 \
+    && push_retry ) \
+    && echo "⏸️  '$who' gilt als absichtlich weg: ${why:-ohne Angabe}" \
+    || die "Pause konnte nicht veröffentlicht werden — 'agent-mesh sync' und nochmal."
+  echo "   Aufheben: agent-mesh resume $who"
+}
+
+cmd_resume() {
+  load_conf
+  local who="${1:-}"
+  [ -n "$who" ] || die "agent-mesh resume <agent>"
+  ( cd "$MEMORIES_DIR" && git pull --rebase -q origin main >/dev/null 2>&1 ) || true
+  [ -f "$(pause_dir)/$who.json" ] || { info "'$who' ist nicht pausiert."; return 0; }
+  rm -f "$(pause_dir)/$who.json"
+  ( cd "$MEMORIES_DIR" \
+    && git add -A "pauses" >/dev/null 2>&1 \
+    && git commit -q -m "resume: $who" >/dev/null 2>&1 \
+    && push_retry ) \
+    && echo "▶️  '$who' wird wieder als Teil des Verbunds erwartet." \
+    || die "Aufhebung konnte nicht veröffentlicht werden — 'agent-mesh sync' und nochmal."
+}
+
 # Berichte einsammeln — seit v1.34.0 von je einer eigenen Referenz pro Agent.
 #
 # Die Referenzen holen ist EIN Rundlauf und rührt main nicht an. Gelesen wird
@@ -510,10 +567,21 @@ cmd_fleet() {
     info "Noch keine Berichte. Jeder Agent veröffentlicht einen beim sync."
     return 0
   fi
-  "$PYTHON_BIN" - "$dir" "$(git -C "$MEMORIES_DIR" show origin/main:VERSION 2>/dev/null || echo '')" << 'PYFLEET'
+  "$PYTHON_BIN" - "$dir" "$(git -C "$MEMORIES_DIR" show origin/main:VERSION 2>/dev/null || echo '')" \
+    "$(pause_dir)" << 'PYFLEET'
 import calendar, json, os, sys, time, glob
 
 base, newest = sys.argv[1], sys.argv[2].strip()
+
+# Wer ist absichtlich weg? Das ist keine Störung und darf keine sein.
+paused = {}
+for p in glob.glob(os.path.join(sys.argv[3] if len(sys.argv) > 3 else "", "*.json")):
+    try:
+        d = json.load(open(p, encoding="utf-8"))
+        paused[d.get("agent") or os.path.basename(p)[:-5]] = d
+    except Exception:
+        pass
+
 rows = []
 for path in sorted(glob.glob(os.path.join(base, "*", "report.json"))):
     try:
@@ -569,28 +637,41 @@ for r in rows:
     a = (r.get("agent") or "?")[:23]
     v = r.get("version") or "?"
     h = age(r.get("ts", ""))
+    pz = paused.get(r.get("agent") or a)
     old = h is not None and h > STALE_H
-    if old:
+    if old and not pz:
         stale += 1
         dead.append(a)
     vmark = "" if v == newest else "!"
-    if vmark: behind += 1
+    # Eine ausgeschaltete Maschine kann nicht aktualisieren. Sie deshalb als
+    # rückständig zu zählen, macht aus einer Entscheidung einen Mangel.
+    if vmark and not pz: behind += 1
     trust = "ja" if r.get("trust") else "NEIN"
     keys = "ok" if "sign-publiziert" in (r.get("keys") or "") else "FEHLT"
     rel = (r.get("release") or "?")[:10]
     bad = r.get("bad", 0)
     sec = "ok" if bad == 0 else f"{bad} offen"
-    if bad or trust == "NEIN" or keys == "FEHLT" or vmark: unhealthy += 1
+    if (bad or trust == "NEIN" or keys == "FEHLT" or vmark) and not pz: unhealthy += 1
     # Ein bekannter Fehlergrund ist wichtiger als der erste Sicherheitsbefund:
     # er erklärt, warum dieser Agent hinterherhinkt.
     first = (r.get("last_error") or "") or (r.get("issues") or [""])[0]
-    first = first[:34]
-    print(f"{a:<24} {v+vmark:<9} {fmt_age(h)+(' STILL' if old else ''):<11} "
+    if pz:
+        # Eine vergessene Pause darf keinen echten Ausfall zudecken: meldet
+        # sich ein pausierter Agent doch, wird genau das gesagt.
+        if not old:
+            first = f"pausiert, meldet sich aber — agent-mesh resume {a}"
+            unhealthy += 1
+        else:
+            first = f"pausiert: {pz.get('reason') or 'ohne Angabe'}"
+    first = first[:44]
+    mark = " PAUSE" if pz else (" STILL" if old else "")
+    print(f"{a:<24} {v+vmark:<9} {fmt_age(h)+mark:<11} "
           f"{trust:<6} {keys:<6} {rel:<10} {sec:<7} {first}")
 
 print("─" * 108)
+pz_n = sum(1 for r in rows if not r.get("broken") and paused.get(r.get("agent")))
 print(f"{len(rows)} Agent(en) · {behind} nicht auf v{newest} · {stale} ohne Lebenszeichen "
-      f"· {unhealthy} mit offenen Punkten")
+      f"· {unhealthy} mit offenen Punkten" + (f" · {pz_n} pausiert" if pz_n else ""))
 # Welche Komponenten laufen im Verbund wirklich — und welche nirgends?
 # Ohne diese Zeile ist jede Aufräum-Entscheidung geraten: relay, webhook und
 # dashboard werden auf jede Maschine installiert, von der CLI aber nie

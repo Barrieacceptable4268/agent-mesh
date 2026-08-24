@@ -6,6 +6,27 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.36.0
+
+**A machine that is off on purpose is not a fault.**
+
+    agent-mesh pause nucbox-evo-x2 "switched off — waiting for an NVMe SSD"
+    agent-mesh resume nucbox-evo-x2
+
+Without this, the fleet view reports a deliberately powered-down machine as a
+failure for as long as it stays off, and recommends repairs on a computer
+nobody can switch on. An alarm that stands wrong for three days gets ignored on
+the fourth as well — including when it is right. That is the actual cost, and
+it is why this is worth a command.
+
+A paused agent counts as neither behind nor silent, and the reason appears in
+its row. The note lives in the shared repository rather than on the machine
+itself — which is, after all, switched off.
+
+**It cannot hide anything.** If a paused agent does report, the fleet view says
+exactly that and asks for the pause to be lifted, counting it as an open point.
+A forgotten pause must never cover up a real outage.
+
 ## v1.35.0
 
 **The client stops being part of the problem.** Nothing to do by hand.

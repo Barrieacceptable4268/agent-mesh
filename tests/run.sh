@@ -327,6 +327,85 @@ if t "install: jedes Framework-Modul steht in install.sh"; then
   [ -z "$missing" ] && ok || no "würde neu installierten Agents fehlen:$missing"
 fi
 
+# ════════════════ Absichtlich abwesend ════════════════
+# Die nucbox ist ausgeschaltet, weil eine SSD fehlt. Ohne Vermerk führt die
+# Flottenübersicht sie dauerhaft als Ausfall — und ein Alarm, der drei Tage
+# lang falsch steht, wird am vierten auch dann ignoriert, wenn er stimmt.
+echo ""
+echo "Absichtlich abwesend"
+
+# Die Auswertung aus dem Modul herausschneiden und mit Testdaten fahren —
+# geprüft wird der echte Code, nicht eine Nachbildung davon.
+sed -n "/<< 'PYFLEET'/,/^PYFLEET\$/p" "$ROOT/agent-mesh-doctor.sh" \
+  | sed '1d;$d' > "$SANDBOX/fleet.py"
+
+mkfleet() {   # mkfleet <verzeichnis> <agent> <version> <alter-in-stunden>
+  mkdir -p "$1/$2"
+  "$PYTHON_BIN_T" - "$1/$2/report.json" "$2" "$3" "$4" << 'MKF'
+import json, sys, time
+path, agent, version, hours = sys.argv[1:5]
+json.dump({"agent": agent, "version": version, "trust": "x", "release": "signiert",
+           "keys": "age,sign-publiziert", "bad": 0, "ok": 1, "issues": [], "components": [],
+           "ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - float(hours)*3600))},
+          open(path, "w"))
+MKF
+}
+mkpause() { mkdir -p "$2"; printf '{"agent":"%s","reason":"%s","since":"x"}\n' "$1" "$3" > "$2/$1.json"; }
+
+if t "pause: eine pausierte Maschine zaehlt nicht als ohne Lebenszeichen"; then
+  d="$SANDBOX/f1"; p="$SANDBOX/p1"; rm -rf "$d" "$p"
+  mkfleet "$d" lebendig 2.0.0 0
+  mkfleet "$d" schlafend 1.0.0 40      # 40 Stunden still
+  mkpause schlafend "$p" "SSD fehlt"
+  out=$("$PYTHON_BIN_T" "$SANDBOX/fleet.py" "$d" "2.0.0" "$p" 2>&1)
+  assert_contains "$out" "0 ohne Lebenszeichen"
+fi
+
+if t "pause: die pausierte Maschine zaehlt auch nicht als rueckstaendig"; then
+  # Eine ausgeschaltete Maschine kann nicht aktualisieren. Sie deshalb als
+  # rueckstaendig zu fuehren, macht aus einer Entscheidung einen Mangel.
+  d="$SANDBOX/f1"; p="$SANDBOX/p1"
+  out=$("$PYTHON_BIN_T" "$SANDBOX/fleet.py" "$d" "2.0.0" "$p" 2>&1)
+  assert_contains "$out" "0 nicht auf v2.0.0"
+fi
+
+if t "pause: der Grund steht in der Zeile"; then
+  d="$SANDBOX/f1"; p="$SANDBOX/p1"
+  out=$("$PYTHON_BIN_T" "$SANDBOX/fleet.py" "$d" "2.0.0" "$p" 2>&1)
+  assert_contains "$out" "SSD fehlt"
+fi
+
+if t "pause: OHNE Vermerk ist dieselbe Maschine sehr wohl ein Befund"; then
+  # Die Gegenprobe — sonst koennte der Test auch gruen sein, weil die
+  # Auswertung ueberhaupt nichts mehr meldet.
+  d="$SANDBOX/f2"; rm -rf "$d"
+  mkfleet "$d" lebendig 2.0.0 0
+  mkfleet "$d" schlafend 1.0.0 40
+  out=$("$PYTHON_BIN_T" "$SANDBOX/fleet.py" "$d" "2.0.0" "$SANDBOX/leer" 2>&1)
+  assert_contains "$out" "1 ohne Lebenszeichen"
+fi
+
+if t "pause: eine vergessene Pause kann keinen Ausfall verstecken"; then
+  # Meldet sich ein pausierter Agent doch, muss die Uebersicht das sagen —
+  # sonst deckt ein alter Vermerk spaeter ein echtes Problem zu.
+  d="$SANDBOX/f3"; p="$SANDBOX/p3"; rm -rf "$d" "$p"
+  mkfleet "$d" wachauf 2.0.0 0
+  mkpause wachauf "$p" "angeblich aus"
+  out=$("$PYTHON_BIN_T" "$SANDBOX/fleet.py" "$d" "2.0.0" "$p" 2>&1)
+  assert_contains "$out" "meldet sich aber"
+fi
+
+if t "pause: veroeffentlicht wird mit push_retry, nicht blank"; then
+  # Die erste Fassung pushte blank und scheiterte prompt, weil ein anderer
+  # Agent main bewegt hatte. push_retry gibt es seit v1.9 genau dafuer.
+  for fn in cmd_pause cmd_resume; do
+    body=$(sed -n "/^$fn() {/,/^}/p" "$ROOT/agent-mesh-doctor.sh")
+    printf '%s\n' "$body" | grep 'push_retry' >/dev/null || { no "$fn benutzt push_retry nicht"; break; }
+    printf '%s\n' "$body" | grep 'git push' >/dev/null && { no "$fn pusht noch blank"; break; }
+    [ "$fn" = "cmd_resume" ] && ok
+  done
+fi
+
 # ════════════════ Höflichkeit gegenüber GitHub ════════════════
 # Am 2026-08-24 meldete der macmini HTTP 429. Was agent-mesh dann tat, stand in
 # einer Zeile: Fehler nach /dev/null, Ergebnis als "nichts geändert" gedeutet,
