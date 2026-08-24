@@ -327,6 +327,101 @@ if t "install: jedes Framework-Modul steht in install.sh"; then
   [ -z "$missing" ] && ok || no "würde neu installierten Agents fehlen:$missing"
 fi
 
+# ════════════════ Selbstinstandsetzung ════════════════
+# Der Verbund wurde gebaut, damit die Agenten sich abstimmen — nicht damit ein
+# Mensch dieselben Befehle auf sechs Rechnern tippt. Fünf Releases lang hiess
+# es trotzdem "einmal service install pro Maschine".
+echo ""
+echo "Selbstinstandsetzung"
+
+A2A="$ROOT/agent-mesh-a2a.sh"
+
+if t "selbstreparatur: haengt an maintenance-run, nicht an converge"; then
+  # Auf den Maschinen mit der alten watch-Schleife laeuft alter Code im
+  # Speicher — deren Schleife sieht neuen Code nie. Was sie aber jeden Zyklus
+  # als EIGENEN Prozess startet, ist maintenance-run. Nur dort erreicht man sie.
+  body=$(sed -n '/^cmd_maintenance_run() {/,/^}/p' "$A2A")
+  printf '%s\n' "$body" | grep 'self_repair' >/dev/null && ok \
+    || no "self_repair haengt nicht am einzigen Haken, der die Alt-Agenten erreicht"
+fi
+
+if t "selbstreparatur: laeuft auch OHNE eingegangenes Signal"; then
+  # Vor der Signalpruefung, sonst passiert ohne Absender nichts.
+  body=$(sed -n '/^cmd_maintenance_run() {/,/^}/p' "$A2A")
+  sr=$(printf '%s\n' "$body" | grep -n 'self_repair' | head -1 | cut -d: -f1)
+  sig=$(printf '%s\n' "$body" | grep -n 'MAINT_SENTINEL' | head -1 | cut -d: -f1)
+  if [ -n "$sr" ] && { [ -z "$sig" ] || [ "$sr" -lt "$sig" ]; }; then ok
+  else no "self_repair steht hinter der Signalpruefung (sr=$sr sig=$sig)"; fi
+fi
+
+if t "selbstreparatur: stellt nur um, wenn wirklich die alte Aufsicht laeuft"; then
+  # Eine Maschine ohne eingerichteten Dienst bekaeme sonst ungefragt einen —
+  # das waere eine Entscheidung, keine Reparatur.
+  body=$(sed -n '/^self_repair() {/,/^}/p' "$A2A")
+  if printf '%s\n' "$body" | grep 'watch-alt' >/dev/null \
+     && printf '%s\n' "$body" | grep 'converge-timer.*return 0' >/dev/null; then ok
+  else no "die Bedingung prueft nicht beide Seiten"; fi
+fi
+
+if t "selbstreparatur: laesst sich abschalten"; then
+  body=$(sed -n '/^self_repair() {/,/^}/p' "$A2A")
+  printf '%s\n' "$body" | grep 'AGENT_MESH_SELF_REPAIR=' >/dev/null && ok \
+    || no "kein Schalter, um das abzustellen"
+fi
+
+if t "selbstreparatur: der Dienstwechsel ueberlebt den Tod seiner Prozessgruppe"; then
+  # DER entscheidende Punkt: `service install` beendet die Aufsicht, in der es
+  # selbst laeuft. Ohne Abkopplung waere die Reihenfolge "neues Plist
+  # geschrieben, alte Aufsicht beendet, neue nie geladen" — ein toter Agent.
+  #
+  # Die erste Fassung dieses Tests liess den Elternteil `kill -TERM 0` rufen.
+  # macOS hat kein `setsid`-Programm, also lief er in derselben Gruppe wie die
+  # Testsuite — und hat sie mitgenommen. Getoetet wird jetzt von AUSSEN.
+  d="$SANDBOX/detach"; rm -rf "$d"; mkdir -p "$d"
+  printf '#!/usr/bin/env bash\nsleep 2\necho ueberlebt > "%s/ergebnis"\n' "$d" > "$d/ziel.sh"
+  chmod +x "$d/ziel.sh"
+  cat > "$d/eltern.sh" << ELTERN
+#!/usr/bin/env bash
+"$PYTHON_BIN_T" - "$d/ziel.sh" "$d/log" << 'PYD'
+import os, subprocess, sys
+target, log = sys.argv[1], sys.argv[2]
+if not hasattr(os, "fork"): sys.exit(1)
+if os.fork() == 0:
+    os.setsid()
+    if os.fork() == 0:
+        with open(log, "a") as f:
+            subprocess.run([target], stdout=f, stderr=f)
+    os._exit(0)
+os.wait()
+PYD
+sleep 30
+ELTERN
+  chmod +x "$d/eltern.sh"
+  # Elternteil in einer EIGENEN Sitzung starten (python hat os.setsid, das
+  # setsid-Programm fehlt auf macOS), Gruppe merken, von aussen abraeumen.
+  pgid=$("$PYTHON_BIN_T" - "$d/eltern.sh" << 'PYP'
+import os, sys, time
+pid = os.fork()
+if pid == 0:
+    os.setsid()
+    os.execv("/bin/bash", ["bash", sys.argv[1]])
+time.sleep(1.0)
+print(pid)
+PYP
+)
+  sleep 1
+  kill -TERM "-$pgid" 2>/dev/null || true
+  for _ in 1 2 3 4 5 6 7 8; do [ -f "$d/ergebnis" ] && break; sleep 1; done
+  kill -KILL "-$pgid" 2>/dev/null || true
+  [ -f "$d/ergebnis" ] && ok || no "der abgekoppelte Wechsel stirbt mit seinem Elternteil"
+fi
+
+if t "selbstreparatur: doctor --fix wird gedrosselt, nicht im Minutentakt"; then
+  body=$(sed -n '/^self_repair() {/,/^}/p' "$A2A")
+  printf '%s\n' "$body" | grep 'SELF_REPAIR_FIX_EVERY' >/dev/null && ok \
+    || no "doctor --fix liefe bei jedem Zyklus"
+fi
+
 # ════════════════ Absichtlich abwesend ════════════════
 # Die nucbox ist ausgeschaltet, weil eine SSD fehlt. Ohne Vermerk führt die
 # Flottenübersicht sie dauerhaft als Ausfall — und ein Alarm, der drei Tage

@@ -6,6 +6,45 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.37.0
+
+**The mesh maintains itself. That was the point of it.**
+
+For five releases running, the answer to "how do the agents get the change?"
+was "run one command on each machine". v1.31.0 moved the service from a
+resident process to an interval, and ever since, every summary ended with *once
+per machine, please*. That is precisely what this mesh was built not to be.
+
+An agent that can tell its own supervision is out of date now fixes it itself.
+The boundary is the one `doctor --fix` already draws: what is provably harmless
+runs on its own; anything needing judgement stays a human decision. Concretely,
+on every cycle an agent will now
+
+  * run `doctor --fix` at most once a day, and
+  * switch its own supervision to the interval arrangement — but only where the
+    old resident process is demonstrably running and no interval exists yet.
+    A machine with no service configured does not get one uninvited; that would
+    be a decision, not a repair.
+
+Turn it off per machine with `AGENT_MESH_SELF_REPAIR=0` in `agent-mesh.conf`.
+
+**Two details decide whether this works at all.**
+
+It hangs off `maintenance-run`, not off `converge`. Three machines are still
+running the old watch loop, and a bash script replaced while running executes
+the *old* content to the end — their loop will never see new code. What it does
+do every cycle is start `agent-mesh maintenance-run` as a separate process, and
+that runs fresh code. It is the only hook that reaches exactly the machines
+that most need the change.
+
+And the switch runs detached. `service install` reloads the supervision — and
+kills the process group it is itself running in. Without detaching, the
+sequence would be: new definition written, old supervision stopped, new one
+never loaded. A dead agent until the next reboot. It is therefore placed in a
+session of its own (double fork plus `setsid`) and survives its parent's death,
+which is verified by a test that kills the parent's whole process group and
+checks the child still finished.
+
 ## v1.36.1
 
 The component survey reported `converge-timer` on macOS whenever the LaunchAgent

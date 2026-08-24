@@ -483,9 +483,106 @@ cmd_maintenance() {
   fi
 }
 
+# ── Selbstinstandsetzung ───────────────────────────────────────────────────
+#
+# Dieser Verbund wurde gebaut, damit die Agenten sich untereinander abstimmen —
+# nicht damit ein Mensch dieselben drei Befehle auf sechs Rechnern tippt. Genau
+# das war er aber fünf Releases lang: v1.31.0 hat den Dienst vom Dauerprozess
+# auf ein Intervall umgestellt, und danach hiess es jedes Mal "einmal
+# `agent-mesh service install` pro Maschine".
+#
+# Ein Agent, der weiss, dass seine eigene Aufsicht veraltet ist, soll das selbst
+# in Ordnung bringen. Dieselbe Grenze wie bei `doctor --fix`: was beweisbar
+# gefahrlos ist, läuft von selbst; alles mit Urteilsbedarf bleibt beim Menschen.
+#
+# ── Warum das ausgerechnet hier steht ──
+#
+# Auf drei Maschinen läuft noch die alte watch-Schleife. Ein Bash-Skript, das
+# im Laufen ersetzt wird, führt den ALTEN Inhalt zu Ende — deren Schleife
+# bekommt neuen Code also nie zu sehen. Was sie aber jeden Zyklus tut, ist
+# `agent-mesh maintenance-run` als eigenen Prozess zu starten, und der läuft
+# mit frischem Code. Dieser Aufruf ist der einzige Haken, an dem man genau die
+# Maschinen erreicht, die den Umbau am nötigsten haben.
+#
+# ── Und warum der Dienstwechsel abgekoppelt laufen muss ──
+#
+# `service install` lädt die Aufsicht neu — und tötet dabei die Prozessgruppe,
+# in der es gerade selbst läuft. Ohne Abkopplung wäre die Reihenfolge: neues
+# Plist geschrieben, alte Aufsicht beendet, neue nie geladen. Ein toter Agent
+# bis zum nächsten Neustart. Deshalb wird der Wechsel in eine eigene Sitzung
+# abgesetzt (doppelter fork + setsid) und überlebt den Tod seines Elternteils.
+SELF_REPAIR_FIX_EVERY="${AGENT_MESH_SELF_REPAIR_FIX_EVERY:-86400}"   # täglich
+SELF_REPAIR_SVC_EVERY="${AGENT_MESH_SELF_REPAIR_SVC_EVERY:-3600}"    # stündlich versuchen
+
+_stamp_age() {   # _stamp_age <datei> → Sekunden seit letzter Berührung
+  local f="$1" mt now
+  [ -f "$f" ] || { echo 999999999; return 0; }
+  now=$(date -u +%s)
+  mt=$(stat -f %m "$f" 2>/dev/null || stat -c %Y "$f" 2>/dev/null || echo 0)
+  echo $(( now - mt ))
+}
+
+self_repair() {
+  local enabled
+  enabled=$(grep "^AGENT_MESH_SELF_REPAIR=" "$CONF" 2>/dev/null | cut -d= -f2- | head -1 || true)
+  [ "${enabled:-1}" = "0" ] && return 0
+
+  local self; self=$(command -v agent-mesh 2>/dev/null || echo "agent-mesh")
+
+  # 1. Die gefahrlosen Reparaturen — höchstens einmal am Tag.
+  local fs="$AGENT_MESH_HOME/.self-repair-fix"
+  if [ "$(_stamp_age "$fs")" -gt "$SELF_REPAIR_FIX_EVERY" ]; then
+    touch "$fs" 2>/dev/null || true
+    "$self" doctor --fix >/dev/null 2>&1 || true
+  fi
+
+  # 2. Ist die eigene Aufsicht noch die alte? Dann selbst umstellen.
+  #    Nur wenn nachweislich der Dauerprozess läuft UND kein Intervall — sonst
+  #    würde eine Maschine ohne eingerichteten Dienst hier ungefragt einen
+  #    bekommen, und das ist eine Entscheidung, keine Reparatur.
+  local comps; comps=$(running_components 2>/dev/null || echo "")
+  case " $comps " in
+    *" watch-alt "*) ;;
+    *) return 0 ;;
+  esac
+  case " $comps " in
+    *" converge-timer "*) return 0 ;;   # beides da: der Wechsel läuft schon
+  esac
+
+  local ss="$AGENT_MESH_HOME/.self-repair-svc"
+  [ "$(_stamp_age "$ss")" -gt "$SELF_REPAIR_SVC_EVERY" ] || return 0
+  touch "$ss" 2>/dev/null || true
+
+  warn "🔧 Aufsicht ist noch der alte Dauerprozess — stelle auf das Intervall um."
+  # Abgekoppelt, sonst beendet der Wechsel den eigenen Prozess mitten darin.
+  "$PYTHON_BIN" - "$self" "$AGENT_MESH_HOME/watch.log" << 'PYDETACH' ||     warn "   Abkoppeln nicht möglich — bitte einmal 'agent-mesh service install'."
+import os, subprocess, sys
+target, log = sys.argv[1], sys.argv[2]
+if not hasattr(os, "fork"):
+    sys.exit(1)          # Windows: kein fork, der Aufrufer sagt es weiter
+if os.fork() == 0:
+    os.setsid()
+    if os.fork() == 0:
+        with open(log, "a") as f:
+            f.write("\n[self-repair] service install (abgekoppelt)\n")
+            f.flush()
+            # Kurz warten, damit der laufende Zyklus sauber endet.
+            subprocess.run(["sleep", "5"])
+            subprocess.run([target, "service", "install"], stdout=f, stderr=f)
+    os._exit(0)
+os.wait()
+PYDETACH
+}
+
 # ── Empfangen und ausführen (vom watch-Daemon aufgerufen) ──
 cmd_maintenance_run() {
   load_conf
+
+  # Zuerst sich selbst in Ordnung bringen — unabhängig davon, ob jemand ein
+  # Signal geschickt hat. Der Verbund soll sich abstimmen, nicht auf Befehle
+  # warten.
+  self_repair || true
+
   local dir="$MESSAGES_DIR/$AGENT_NAME"
   [ -d "$dir" ] || return 0
   local allowed; allowed=$(maintenance_allowed_from)
@@ -556,6 +653,12 @@ maintenance_sequence() {
   # Nur die gefahrlosen Reparaturen — siehe doctor_fix. Alles mit Urteilsbedarf
   # bleibt liegen und taucht in der Flotten-Übersicht auf.
   "$self" doctor --fix 2>&1 | grep -E "✓|❌" | head -5 || true
+
+  # Und die eigene Aufsicht, falls sie noch die alte ist. Ohne Zeitsperre:
+  # wer ausdrücklich um Wartung gebeten wurde, soll nicht auf eine Stunde
+  # warten müssen.
+  rm -f "$AGENT_MESH_HOME/.self-repair-svc" 2>/dev/null || true
+  self_repair || true
 
   "$self" sync 2>&1 | tail -3
 
