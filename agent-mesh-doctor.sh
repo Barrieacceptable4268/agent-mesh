@@ -199,7 +199,7 @@ security_checks() {
       pass "$d — aktuell"
     else
       # "1 Datei weicht ab" ist keine handlungsfähige Aussage — welche?
-      bad "$d — $diffs Datei(en) weichen ab: $(echo "$difflist" | sed 's/^ //' | cut -c1-70)"
+      bad "$(printf '%s — %s Datei(en) weichen ab: %.70s' "$d" "$diffs" "$(echo "$difflist" | sed 's/^ //')")"
       stale=$((stale+1))
     fi
   done
@@ -287,7 +287,15 @@ report_facts() {
 
   if [ -d "$fw/.git" ]; then
     R_VERSION=$(cat "$fw/VERSION" 2>/dev/null || echo "?")
-    R_COMMIT=$(git -C "$fw" log -1 --format='%h %s' 2>/dev/null | cut -c1-58)
+    # NICHT mit `cut -c` kürzen: ob das Zeichen oder Bytes zählt, hängt am
+    # Locale. Interaktiv (LANG=…UTF-8) sind es Zeichen, unter launchd/systemd
+    # ohne LANG sind es Bytes — und dann wird ein mehrbyte Zeichen mitten
+    # durchgeschnitten. Am 2026-08-24 lag der Gedankenstrich einer
+    # Commit-Meldung genau auf Position 58; das ergab ungültiges UTF-8, der
+    # Bericht wurde zu Recht als ungültig verworfen, und weil ALLE Agenten
+    # denselben Framework-Commit melden, schwieg die ganze Flotte vier Stunden.
+    # Gekürzt wird jetzt dort, wo die Kodierung bekannt ist: in Python.
+    R_COMMIT=$(git -C "$fw" log -1 --format='%h %s' 2>/dev/null | head -1)
     R_REMOTE=$(git -C "$fw" show origin/main:VERSION 2>/dev/null || echo "?")
   fi
 
@@ -752,7 +760,16 @@ k = ["ts","host","os","agent","version","commit","remote","installs","onpath",
      "trust","release","keys","relay_token","watcher","ok","bad","issues","components",
      "last_error"]
 v = sys.argv[1:20]
-d = dict(zip(k, v))
+# Argumente kommen als str mit surrogateescape herein — ein kaputtes Byte
+# überlebt bis in die Datei und macht sie unlesbar. Einmal sauber durch UTF-8
+# schicken, dann kann kein Aufrufer diesen Bericht mehr vergiften.
+def clean(x):
+    return x.encode("utf-8", "replace").decode("utf-8", "replace")
+
+d = dict(zip(k, [clean(x) for x in v]))
+# Hier kürzen, nicht in der Shell: an dieser Stelle sind es nachweislich
+# Zeichen und keine Bytes.
+d["commit"] = d["commit"][:58]
 d["ok"] = int(d["ok"] or 0); d["bad"] = int(d["bad"] or 0)
 d["installs"] = [x for x in d["installs"].split() if x]
 d["issues"] = [x for x in d["issues"].split("\n") if x.strip()]
@@ -767,7 +784,7 @@ PYJSON
   printf '%-14s %s (%s, bash %s)\n' "host" "$R_HOST" "$R_OS" "${BASH_VERSION%%(*}"
   printf '%-14s %s\n' "agent" "${R_AGENT:-NICHT INITIALISIERT}"
   if [ -n "$R_VERSION" ]; then
-    printf '%-14s v%s  (%s)\n' "framework" "$R_VERSION" "$R_COMMIT"
+    printf '%-14s v%s  (%.58s)\n' "framework" "$R_VERSION" "$R_COMMIT"
     if [ "$R_VERSION" = "$R_REMOTE" ]; then printf '%-14s v%s — aktuell\n' "remote" "$R_REMOTE"
     else printf '%-14s v%s  ⚠️  UPDATE NÖTIG\n' "remote" "$R_REMOTE"; fi
   else

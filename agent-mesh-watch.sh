@@ -185,7 +185,10 @@ _diagnose_git() {   # _diagnose_git <stderr-text>
     *"timed out"*|*"Timeout"*)
       echo "Zeitüberschreitung zu GitHub" ;;
     "") echo "git fetch gescheitert (ohne Meldung)" ;;
-    *)  echo "$(printf '%s' "$1" | tr '\n' ' ' | cut -c1-90)" ;;
+    # Kürzt im C-Locale nach Bytes, genau wie `cut -c` — hier ist das
+    # unschädlich, weil dieser Text nur auf ein Terminal geht. Wo aus dem Text
+    # JSON wird, darf so nicht gekürzt werden; siehe report_facts.
+    *)  printf '%.90s\n' "$(printf '%s' "$1" | tr '\n' ' ')" ;;
   esac
 }
 

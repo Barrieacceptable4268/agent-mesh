@@ -327,6 +327,65 @@ if t "install: jedes Framework-Modul steht in install.sh"; then
   [ -z "$missing" ] && ok || no "würde neu installierten Agents fehlen:$missing"
 fi
 
+# ════════════════ Kürzen ohne Locale-Glück ════════════════
+# Am 2026-08-24 schwieg die ganze Flotte vier Stunden. Ursache: `cut -c1-58`
+# zählt Zeichen, wenn ein UTF-8-Locale gesetzt ist, und BYTES, wenn keines
+# gesetzt ist — und unter launchd/systemd ist keines gesetzt. Der
+# Gedankenstrich einer Commit-Meldung lag genau auf Position 58, wurde mitten
+# durchgeschnitten, und der Bericht war ungültiges UTF-8. Weil alle Agenten
+# denselben Framework-Commit melden, traf es alle gleichzeitig.
+echo ""
+echo "Kürzen ohne Locale-Glück"
+
+if t "kuerzen: im C-Locale schneiden BEIDE mitten hinein"; then
+  # Der eigentliche Befund, und er ist unbequemer als gedacht: nicht nur
+  # `cut -c` zaehlt im C-Locale Bytes, `printf %.Ns` tut es auch. In der Shell
+  # laesst sich das nicht sauber loesen — der Schutz MUSS dort sitzen, wo die
+  # Kodierung bekannt ist. Dieser Test haelt die Praemisse fest, damit niemand
+  # spaeter glaubt, ein printf haette das Problem behoben.
+  txt="f8a3bf1 feat: der Verbund bringt sich selbst in Ordnung — dafür war er gebaut"
+  pruef() { "$PYTHON_BIN_T" -c "
+import sys
+raw = sys.stdin.buffer.read().rstrip(b'\n')
+try:
+    raw.decode('utf-8'); print('ok')
+except UnicodeDecodeError:
+    print('kaputt')"; }
+  a=$(LC_ALL=C printf '%s' "$txt" | LC_ALL=C cut -c1-58 | pruef)
+  b=$(LC_ALL=C printf '%.58s' "$txt" | pruef)
+  if [ "$a" = "kaputt" ] && [ "$b" = "kaputt" ]; then ok
+  else no "cut=$a printf=$b — erwartet war, dass BEIDE zerschneiden"; fi
+fi
+
+if t "kuerzen: der Commit wird nicht mehr in der Shell geschnitten"; then
+  grep -n "R_COMMIT=.*cut -c" "$ROOT/agent-mesh-doctor.sh" >/dev/null \
+    && no "R_COMMIT wird wieder mit cut -c gekuerzt" || ok
+fi
+
+if t "bericht: ein kaputtes Byte macht den Bericht nicht unlesbar"; then
+  # Den echten JSON-Bauer herausschneiden und mit vergiftetem Argument fahren.
+  # Nicht "json.py" nennen: die Datei importiert json und laege als erstes auf
+  # sys.path — sie importierte sich selbst. (Daran ist die erste Fassung
+  # dieses Tests gescheitert, die zweite an einem \x, das schon beim Schreiben
+  # der Testdatei aufgeloest wurde.)
+  sed -n "/<< 'PYJSON'/,/^PYJSON\$/p" "$ROOT/agent-mesh-doctor.sh" | sed '1d;$d' > "$SANDBOX/berichtbauer.py"
+  out=$("$PYTHON_BIN_T" - "$SANDBOX/berichtbauer.py" << 'POISON'
+import subprocess, sys, json
+# Ein halbierter Gedankenstrich: 0xE2 0x80 statt 0xE2 0x80 0x94.
+kaputt = bytes([0xE2, 0x80]).decode("utf-8", "surrogateescape")
+args = ["ts", "host", "os", "agent", "1.0.0", "abc feat: kaputt " + kaputt,
+        "1.0.0", "", "", "", "", "", "nein", "ja", "0", "0", "", "", ""]
+r = subprocess.run([sys.executable, sys.argv[1]] + args, capture_output=True)
+try:
+    json.loads(r.stdout.decode("utf-8"))
+    print("gueltig")
+except Exception as e:
+    print("ungueltig:", type(e).__name__)
+POISON
+)
+  assert_eq "$out" "gueltig"
+fi
+
 # ════════════════ Selbstinstandsetzung ════════════════
 # Der Verbund wurde gebaut, damit die Agenten sich abstimmen — nicht damit ein
 # Mensch dieselben Befehle auf sechs Rechnern tippt. Fünf Releases lang hiess

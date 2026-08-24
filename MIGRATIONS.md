@@ -6,6 +6,30 @@ has to think of reading this file.
 
 Format: one `## vX.Y.Z` heading per version, plain text below it.
 
+## v1.37.1
+
+**The whole fleet went silent for four hours, and the cause was a dash.**
+
+`R_COMMIT` was shortened with `cut -c1-58`. Whether that counts characters or
+*bytes* depends on the locale — interactively `LANG` is a UTF-8 locale and it
+counts characters; under launchd and systemd no locale is set, so it counts
+bytes. The em dash in a commit subject began at byte 56, the cut landed at 58,
+and the report became invalid UTF-8.
+
+The validity check did its job and refused to publish a broken report, which is
+why the mesh went quiet rather than filling up with garbage. But every agent
+reports the *same* framework commit, so every agent stopped publishing at the
+same moment. One commit message froze the telemetry of the entire fleet.
+
+Shortening now happens where the encoding is known — in the Python that builds
+the JSON — and every value passes through a UTF-8 round trip first, so no
+caller can poison the report again.
+
+Worth recording, because the first fix was wrong: `printf '%.58s'` splits the
+character in exactly the same place. In a shell this cannot be solved cleanly;
+the protection has to sit where the encoding is known. A test holds that
+premise, so nobody later believes a `printf` fixed it.
+
 ## v1.37.0
 
 **The mesh maintains itself. That was the point of it.**
